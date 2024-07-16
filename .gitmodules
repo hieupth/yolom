@@ -1,6 +1,0 @@
-[submodule "yoloxyz/backbones/yolov7"]
-	path = yoloxyz/backbones/yolov7
-	url = https://github.com/hieupth/yolov7
-[submodule "yoloxyz/backbones/yolov9"]
-	path = yoloxyz/backbones/yolov9
-	url = https://github.com/hieupth/yolov9

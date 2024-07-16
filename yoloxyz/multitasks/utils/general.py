@@ -11,8 +11,7 @@ from glob import glob
 from copy import deepcopy
 
 
-from backbones.yolov7.utils.general import box_iou, xyxy2xywh
-
+from yolov7.utils.general import box_iou, xyxy2xywh
 
 
 def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, multi_label=False,
@@ -24,7 +23,13 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
     """
     if nc is None:
         nc = prediction.shape[2] - 5  if not kpt_label else prediction.shape[2] - 5 - kpt_label * 3 # number of classes
-    xc = prediction[..., 4] > conf_thres  # candidates
+    
+    if isinstance(prediction, (list, tuple)):  # YOLO model in validation model, output = (inference_out, loss_out)
+        prediction = prediction[0]  # select only inference output
+    
+    mi = 4 + nc  # mask start index
+    xc = prediction[:, 4:mi].amax(1) > conf_thres  # candidates
+    # xc = prediction[..., 4] > conf_thres  # candidates
 
     # Settings
     min_wh, max_wh = 2, 4096  # (pixels) minimum and maximum box width and height
@@ -40,7 +45,10 @@ def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=Non
     for xi, x in enumerate(prediction):  # image index, image inference
         # Apply constraints
         # x[((x[..., 2:4] < min_wh) | (x[..., 2:4] > max_wh)).any(1), 4] = 0  # width-height
-        x = x[xc[xi]]  # confidence
+        try:
+            x = x[xc[xi]]  # confidence
+        except:
+            x = x.T[xc[xi]]  # confidence
 
         # Cat apriori labels if autolabelling
         if labels and len(labels[xi]):

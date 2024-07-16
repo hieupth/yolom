@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from multitasks.utils.general import bbox_iou
-from yoloxyz.backbones.yolov7.utils.torch_utils import is_parallel
+from yolov7.utils.torch_utils import is_parallel
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
@@ -138,13 +138,15 @@ class ComputeLoss:
             det = model.module.model[-i] if is_parallel(model) else model.model[-i]  # Detect() module
             if detect_layer == det.__class__.__name__:
                 break
+            
         self.balance = {3: [4.0, 1.0, 0.4]}.get(det.nl, [4.0, 1.0, 0.25, 0.06, .02])  # P3-P7
         self.ssi = list(det.stride).index(16) if autobalance else 0  # stride 16 index
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance, self.iou_loss = BCEcls, BCEobj, model.gr, h, autobalance, model.iou_loss
+        
         for k in 'na', 'nc', 'nl', 'anchors', 'nkpt':
             if hasattr(det, k):
                 setattr(self, k, getattr(det, k))
-
+        
     def __call__(self, p, targets):  # predictions, targets, model
         device = targets.device
         lcls, lbox, lobj, lkpt, lkptv = torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device), torch.zeros(1, device=device)
@@ -207,25 +209,28 @@ class ComputeLoss:
         bs = tobj.shape[0]  # batch size
 
         loss = lbox + lobj + lcls + lkpt + lkptv
+        
         return loss * bs, torch.cat((lbox, lobj, lcls, lkpt, lkptv, loss)).detach()
 
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
-        na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        nt = targets.shape[0]  # number of anchors, targets
         tcls, tbox, tkpt, indices, anch = [], [], [], [], []
         if self.kpt_label:
             gain = torch.ones(self.kpt_label*2+7, device=targets.device).long()  # normalized to gridspace gain
         else:
             gain = torch.ones(7, device=targets.device).long()  # normalized to gridspace gain
-        ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
-        targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
+        
+        if self.na:
+            na = self.na  # number of anchors, targets
+            ai = torch.arange(na, device=targets.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
+            targets = torch.cat((targets.repeat(na, 1, 1), ai[:, :, None]), 2)  # append anchor indices
 
         g = 0.5  # bias
         off = torch.tensor([[0, 0],
                             [1, 0], [0, 1], [-1, 0], [0, -1],  # j,k,l,m
                             # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
                             ], device=targets.device).float() * g  # offsets
-
         for i in range(self.nl):
             anchors = self.anchors[i]
             if self.kpt_label:
@@ -234,7 +239,7 @@ class ComputeLoss:
                 gain[2:6] = torch.tensor(p[i].shape)[[3, 2, 3, 2]]  # xyxy gain
 
             # Match targets to anchors
-            t = targets * gain
+            t = targets * gain # shape(3,n,7)
             if nt:
                 # Matches
                 r = t[:, :, 4:6] / anchors[:, None]  # wh ratio

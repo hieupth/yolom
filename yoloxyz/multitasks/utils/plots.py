@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from PIL import Image, ImageDraw
 
-from backbones.yolov7.utils.general import xywh2xyxy
+from yolov7.utils.general import xywh2xyxy
 
 
 # Settings

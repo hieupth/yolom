@@ -20,10 +20,11 @@ from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils.general import check_requirements, xyxy2xywh, xywh2xyxy, xyn2xy, segment2box, \
-    resample_segments, clean_str
-from backbones.yolov7.utils.torch_utils import torch_distributed_zero_first
-from multitasks.utils.general import xywhn2xyxy
+from yolov7.utils.torch_utils import torch_distributed_zero_first
+from yolov7.utils.general import xyxy2xywh, check_requirements, xyn2xy, segment2box, resample_segments, clean_str
+from multitasks.utils.general import xywh2xyxy, xywhn2xyxy
+
+# torch.set_printoptions(threshold=10_000)
 
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
@@ -58,10 +59,8 @@ def exif_size(img):
 
 
 def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=False, cache=False, pad=0.0, rect=False,
-                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', tidl_load=False, 
-                      kpt_label=False, multiloss=False):
+                      rank=-1, world_size=1, workers=8, image_weights=False, quad=False, prefix='', tidl_load=False, kpt_label=False, multiloss=False, detect_layer=None):
     # Make sure only the first process in DDP process the dataset first, and the following others can use the cache
-
     with torch_distributed_zero_first(rank):
         dataset = LoadImagesAndLabels(path, imgsz, batch_size,
                                       augment=augment,  # augment images
@@ -75,7 +74,8 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
                                       prefix=prefix,
                                       tidl_load=tidl_load,
                                       kpt_label=kpt_label,
-                                      multiloss=multiloss)
+                                      multiloss=multiloss,
+                                      detect_layer=detect_layer)
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -89,7 +89,7 @@ def create_dataloader(path, imgsz, batch_size, stride, opt, hyp=None, augment=Fa
         collate = LoadImagesAndLabels.multi_collate_fn
     else:
         collate = LoadImagesAndLabels.collate_fn
-        
+    
     dataloader = loader(dataset,
                         batch_size=batch_size,
                         num_workers=nw,
@@ -360,8 +360,7 @@ def img2label_paths(img_paths):
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='',square=False, tidl_load=False, 
-                 kpt_label=0, multiloss=False):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='',square=False, tidl_load=False, kpt_label=0,multiloss=False, detect_layer=None):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -375,6 +374,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.path = path
         self.kpt_label = kpt_label
         self.flip_index = [1, 0, 2, 4, 3]
+        self.multiloss = multiloss
+        self.detect_layer = detect_layer
 
         try:
             f = []  # image files
@@ -503,6 +504,8 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                             line_label = line_label.split()
                             if len(line_label) == 5 and kpt_label:
                                 line_label = line_label + [0]*15
+                            # if len(line_label) == 20 and not kpt_label:
+                            #     line_label = line_label[:5]
                             l.append(line_label)
 
                         #l = [x.split() for x in f.read().strip().splitlines()]
@@ -515,7 +518,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
                     if len(l):
                         #assert (l >= 0).all(), 'negative labels' # change here
-                        
+
                         if kpt_label:
                             assert l.shape[1] == kpt_label*3 + 5, 'labels require {} columns each'.format(kpt_label*3+5)
                             assert (l[:, 5::3] <= 1).all(), '5::3 non-normalized or out of bounds coordinate labels'
@@ -683,23 +686,22 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         label = torch.cat(label, 0)
         
-        return torch.stack(img, 0), {'IDetect':label}, path, shapes
-        
+        return torch.stack(img, 0), label, path, shapes
+    
     @staticmethod
     def multi_collate_fn(batch):
         img, label, path, shapes = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
 
-        label = torch.cat(label, 0)
+        label = torch.cat(label,0)
 
-        # Split samples in batc into right class label for pretrain
-        # WIDER_FACE: face = 0, head = 1, body = 2
-        face_label = label[label[:,1] == 0]
+        # Custom class label for widerface
         head_label = label[label[:,1] == 1]
+        face_label = label[label[:,1] == 0]
         body_label = label[label[:,1] == 2]
-        
-        head_label[:, 1], body_label[: 1] = 0, 0
+        head_label[:, 1] = 0
+        body_label[:, 1] = 0
         
         return torch.stack(img, 0), {'IKeypoint':face_label, 'IDetectHead':head_label[:,:6], 'IDetectBody':body_label[:,:6]}, path, shapes
 

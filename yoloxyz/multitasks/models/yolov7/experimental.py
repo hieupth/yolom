@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 import random
 
-from backbones.yolov7.models.common import Conv, DWConv
-from backbones.yolov7.models.experimental import Ensemble
-from backbones.yolov7.utils.google_utils import attempt_download
+from yolov7.models.common import Conv, DWConv
+from yolov7.models.experimental import Ensemble
+from yolov7.utils.google_utils import attempt_download
 
 
 
@@ -48,7 +48,7 @@ class GhostBottleneck(nn.Module):
     
 
 def attempt_load(weights, map_location=None, inplace=True):
-    from yoloxyz.backbones.yolov7.models.yolo import Detect, Model
+    from yolov7.models.yolo import Detect, Model
 
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
     model = Ensemble()

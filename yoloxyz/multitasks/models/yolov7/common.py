@@ -4,8 +4,8 @@ import math
 import torch
 import torch.nn as nn
 
-from backbones.yolov7.utils.general import non_max_suppression
-from backbones.yolov7.models.common import autopad, Contract, TransformerBlock
+from yolov7.utils.general import non_max_suppression
+from yolov7.models.common import autopad, Contract, TransformerBlock
 
 from multitasks.utils.general import non_max_suppression_export
 
