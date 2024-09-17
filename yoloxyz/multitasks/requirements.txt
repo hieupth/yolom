@@ -10,6 +10,8 @@ scipy>=1.4.1
 torch==2.2.0
 torchvision==0.17.0
 tqdm>=4.41.0
+ipython
+psutil
 
 # logging -------------------------------------
 tensorboard>=2.4.1
@@ -31,7 +33,7 @@ pycocotools>=2.0  # COCO mAP
 requests
 
 # YoloV7
-bbyolov7
+git+https://github.com/tien-ngnvan/yolov7.git
 
 # YoloV9
-bbyolov9
+git+https://github.com/tien-ngnvan/yolov9.git

@@ -1,0 +1,14 @@
+python yoloxyz/train.py \
+  --basemodel 'v7' \
+  --epochs 10 \
+  --workers 8 \
+  --device '0' \
+  --batch-size 10 \
+  --data yoloxyz/cfg/data/widerface.yaml \
+  --cfg yoloxyz/cfg/architecture/yolov7-tiny-multitask.yaml \
+  --name yolov7-tiny-pretrain \
+  --hyp yoloxyz/cfg/hyp/hyp.yolov7.tiny.yaml \
+  --kpt-label 5 \
+  --iou-loss EIoU \
+  --multilosses \
+  --detect-layer 'IKeypoint'

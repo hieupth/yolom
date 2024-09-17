@@ -51,7 +51,9 @@ from yolov9.utils.loss_tal_dual import ComputeLoss as ComputeLossV9
 from arguments import training_arguments
 from multitasks.utils.datasets import create_dataloader
 from multitasks.utils.loss import ComputeLoss as ComputeLossV7
-import yoloxyz.test as validate
+# import yoloxyz.test2 as validate
+from yolov9 import val as validate
+
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -145,9 +147,9 @@ def train(hyp, opt, device, callbacks):
         model.load_state_dict(csd, strict=False)  # load
         LOGGER.info(f'----- Transferred {len(csd)}/{len(model.state_dict())} items from {weights} -----')  # report
     else:
-        if basemodel.lower() == 'V7':
+        if basemodel.lower() == 'v7':
             model = ModelV7(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), headlayers=headlayers).to(device)  # create
-        elif basemodel.lower() == 'V9':
+        elif basemodel.lower() == 'v9':
             model = ModelV9(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # created
         else:
             raise NotImplemented
@@ -415,9 +417,8 @@ def train(hyp, opt, device, callbacks):
                                                 save_dir=save_dir,
                                                 plots=False,
                                                 callbacks=callbacks,
-                                                compute_loss=loss_fn,
                                                 detect_layer=detect_layer,
-                                                kpt_label=kpt_label)
+                                                compute_loss=loss_fn)
             # Update best mAP
             fi = fitness(np.array(results).reshape(1, -1))  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
             stop = stopper(epoch=epoch, fitness=fi)  # early stop check
@@ -486,8 +487,7 @@ def train(hyp, opt, device, callbacks):
                         plots=plots,
                         callbacks=callbacks,
                         compute_loss=loss_fn,
-                        detect_layer=detect_layer,
-                        kpt_label=kpt_label)  # val best model with plots
+                        detect_layer=detect_layer)  # val best model with plots
                     if is_coco:
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
 
