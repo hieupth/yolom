@@ -23,36 +23,36 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 # YoloV7
-# from multitasks.models.yolov7.yolo import ModelV7
-# from multitasks.models.yolov7.experimental import attempt_load as loadV7
-from backbones.yolov9.utils.general import check_dataset
+from multitasks.models.yolov7.yolo import ModelV7
+from multitasks.models.yolov7.experimental import attempt_load as loadV7
+from yolov7.utils.general import check_dataset
 
 # YoloV9
-from backbones.yolov9.models.yolo import Model as ModelV9
-from backbones.yolov9.utils.general import (yaml_save, LOGGER, methods, init_seeds, check_suffix,
+from yolov9.models.yolo import Model as ModelV9
+from yolov9.utils.general import (yaml_save, LOGGER, methods, init_seeds, check_suffix,
                                             intersect_dicts, check_amp, check_img_size, one_cycle, one_flat_cycle,
                                             colorstr, labels_to_class_weights, labels_to_image_weights, TQDM_BAR_FORMAT,
                                             strip_optimizer, print_args, check_file, check_yaml, increment_path, 
                                             get_latest_run, print_mutation
                                         )
-from backbones.yolov9.utils.loggers.comet.comet_utils import check_comet_resume
-from backbones.yolov9.utils.callbacks import Callbacks
-from backbones.yolov9.utils.metrics import fitness
-from backbones.yolov9.utils.autobatch import check_train_batch_size
-from backbones.yolov9.utils.loggers import Loggers
-from backbones.yolov9.utils.torch_utils import (torch_distributed_zero_first, smart_optimizer, ModelEMA, smart_resume, 
+from yolov9.utils.loggers.comet.comet_utils import check_comet_resume
+from yolov9.utils.callbacks import Callbacks
+from yolov9.utils.metrics import fitness
+from yolov9.utils.autobatch import check_train_batch_size
+from yolov9.utils.loggers import Loggers
+from yolov9.utils.torch_utils import (torch_distributed_zero_first, smart_optimizer, ModelEMA, smart_resume, 
                                         smart_DDP, EarlyStopping, select_device, de_parallel
                                             )
-from backbones.yolov9.models.experimental import attempt_download, attempt_load as loadV9 
-from backbones.yolov9.utils.downloads import is_url
-from backbones.yolov9.utils.plots import plot_evolve
-from backbones.yolov9.utils.loss_tal_dual import ComputeLoss as ComputeLossV9
+from yolov9.models.experimental import attempt_download, attempt_load as loadV9 
+from yolov9.utils.downloads import is_url
+from yolov9.utils.plots import plot_evolve
+from yolov9.utils.loss_tal_dual import ComputeLoss as ComputeLossV9
 
 from arguments import training_arguments
 from multitasks.utils.datasets import create_dataloader
 from multitasks.utils.loss import ComputeLoss as ComputeLossV7
 # import yoloxyz.test2 as validate
-from backbones.yolov9 import val as validate
+from yolov9 import val as validate
 
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
