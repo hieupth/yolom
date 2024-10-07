@@ -1,0 +1,3 @@
+[submodule "yoloxyz/backbones/yolov9"]
+	path = yoloxyz/backbones/yolov9
+	url = https://github.com/hieupth/yolov9.git
