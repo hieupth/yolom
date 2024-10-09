@@ -11,7 +11,7 @@ from glob import glob
 from copy import deepcopy
 
 
-from yolov7.utils.general import box_iou, xyxy2xywh
+from backbones.yolov9.utils.general import box_iou, xyxy2xywh
 
 
 def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, multi_label=False,
