@@ -15,7 +15,7 @@ RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 class YOLOv9LightningModule(pl.LightningModule):
-    def __init__(self, model_config, hyp_path, lr=1e-3):
+    def __init__(self, lr=1e-3):
         super(YOLOv9LightningModule, self).__init__()
         # Sử dụng setattr để gán thuộc tính
         self.loss_fn, self.gs, self.imgsz, self.model_device, self.amp, self.yolo_model = gs.get_model(opt)
@@ -97,8 +97,8 @@ class YOLOv9LightningModule(pl.LightningModule):
 
 # Phần dưới giữ nguyên không thay đổi.
 if __name__ == '__main__':
-    data_yaml_path = r"C:\Users\admin\Desktop\datasets\data.yaml"
-    hyp_yaml_path = r'D:\FPT\AI\Major6\OJT_yolo\yoloxyz\backbones\yolov9\data\hyps\hyp.scratch-high.yaml'
+    data_yaml_path = opt.data
+    hyp_yaml_path = opt.hyp
 
     with open(data_yaml_path, 'r') as f:
         data = yaml.safe_load(f)
@@ -109,26 +109,19 @@ if __name__ == '__main__':
     with open(hyp_yaml_path, 'r') as f:
         hyp = yaml.safe_load(f)
 
-    batch_size = 2
-    img_size = 320
-    num_workers = 4
-
     train_loader, _ = create_dataloader(
-        path=train_path, imgsz=img_size, batch_size=batch_size, stride=32, 
+        path=train_path, imgsz=opt.imgsz, batch_size=opt.batch_size, stride=32, 
         hyp=hyp, augment=True, cache=False, rect=False, 
-        rank=-1, workers=num_workers, opt=opt
+        rank=-1, workers=opt.workers, opt=opt
     )
 
     val_loader, _ = create_dataloader(
-        path=val_path, imgsz=img_size, batch_size=batch_size, stride=32, 
+        path=val_path, imgsz=opt.imgsz, batch_size=opt.batch_size, stride=32, 
         hyp=hyp, augment=False, cache=False, rect=True, 
-        rank=-1, workers=num_workers, opt=opt
+        rank=-1, workers=opt.workers, opt=opt
     )
 
     trainer = pl.Trainer(devices=1, accelerator="gpu", max_epochs=2)
-
-    model_config_path = r'D:\FPT\AI\Major6\OJT_yolo\yoloxyz\backbones\yolov9\models\detect\yolov9-c.yaml'
-    hyp_path = r'D:\FPT\AI\Major6\OJT_yolo\yoloxyz\backbones\yolov9\data\hyps\hyp.scratch-high.yaml'
-    model = YOLOv9LightningModule(model_config=model_config_path, hyp_path=hyp_path)
+    model = YOLOv9LightningModule()
 
     trainer.fit(model, train_loader, val_loader)
