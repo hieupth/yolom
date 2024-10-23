@@ -276,43 +276,7 @@ def train(hyp, opt, device, callbacks):
                 f"Logging results to {colorstr('bold', save_dir)}\n"
                 f'Starting training for {epochs} epochs...')
     
-    return loss_fn, gs, imgsz, amp, model
-    for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
-        callbacks.run('on_train_epoch_start')
-        model.train()
-
-        # Update image weights (optional, single-GPU only)
-        if opt.image_weights:
-            cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
-            iw = labels_to_image_weights(dataset.labels, nc=nc, class_weights=cw)  # image weights
-            dataset.indices = random.choices(range(dataset.n), weights=iw, k=dataset.n)  # rand weighted idx
-        if epoch == (epochs - opt.close_mosaic):
-            LOGGER.info("Closing dataloader mosaic")
-            dataset.mosaic = False
-
-        # Update mosaic border (optional)
-        # b = int(random.uniform(0.25 * imgsz, 0.75 * imgsz + gs) // gs * gs)
-        # dataset.mosaic_border = [b - imgsz, -b]  # height, width borders
-        if basemodel == 'v7':
-            mloss = torch.zeros(6, device=device)  # mean losses
-            LOGGER.info(('\n' + '%12s' * 10) % ('Epoch', 'GPU_mem', 'box_loss' ,'dfl_loss', 'cls_loss', 'kpt_loss', 'mask_loss', 'total_loss', 'Instances', 'Size'))
-        else:
-            mloss = torch.zeros(3, device=device)  # mean losses
-            LOGGER.info(('\n' + '%12s' * 7) % ('Epoch', 'GPU_mem', 'box_loss' ,'dfl_loss', 'cls_loss', 'Instances', 'Size'))
-        if RANK != -1:
-            train_loader.sampler.set_epoch(epoch)
-        pbar = enumerate(train_loader)
-        
-        if RANK in {-1, 0}:
-            pbar = tqdm(pbar, total=nb, bar_format=TQDM_BAR_FORMAT)  # progress bar
-        optimizer.zero_grad()
-        for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
-            callbacks.run('on_train_batch_start')
-            ni = i + nb * epoch  # number integrated batches (since train start)
-            imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
-
-
-            # Forward
+    return loss_fn, gs, imgsz, amp, model, data_dict, ema
 
 def get_model(opt, callbacks=Callbacks()):
     # Checks
@@ -360,12 +324,12 @@ def get_model(opt, callbacks=Callbacks()):
 
     # Train
     if not opt.evolve:
-        loss_fn, gs, imgsz, amp, model = train(opt.hyp, opt, device, callbacks)
+        loss_fn, gs, imgsz, amp, model, data_dict, ema = train(opt.hyp, opt, device, callbacks)
 
     # Evolve hyperparameters (optional)
     else:
         model = None
         print("Wrong hyperparam")
     
-    return loss_fn, gs, imgsz, device, amp, model
+    return loss_fn, gs, imgsz, device, amp, model, data_dict, ema
 
