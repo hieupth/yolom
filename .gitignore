@@ -168,3 +168,5 @@ yoloxyz/runs/
 yoloxyz/pytorch_lightning/test.ipynb
 yoloxyz/pytorch_lightning/test.py
 
+# Datasets
+datasets/

@@ -2,21 +2,59 @@ import sys
 sys.path.append("D:/FPT/AI/Major6/OJT_yolo/yoloxyz")
 
 import pytorch_lightning as pl
-import get_model as gs
+from backbones.yolov9 import val_dual as validate
+# import val_dual as validate
+import get_model as gm
 from backbones.yolov9.utils.metrics import ap_per_class, box_iou
 import random
 import math
 import numpy as np
 import copy
-from pathlib import Path
+from backbones.yolov9.utils.callbacks import Callbacks
 
+from datasets_pl import CustomDataModule
 import os
 import torch.nn as nn
 import torch
 from arguments import training_arguments
 from backbones.yolov9.utils.general import scale_boxes, xywh2xyxy, non_max_suppression, Profile
 
-opt = training_arguments(True)
+from backbones.yolov9.utils.torch_utils import ModelEMA
+from backbones.yolov9.utils.dataloaders import create_dataloader
+from backbones.yolov9.utils.general import colorstr
+import yaml
+
+
+def get_opt():
+    opt = training_arguments(True)
+    return opt
+
+def get_data(model):
+    opt = get_opt()
+    data_yaml_path=opt.data
+    hyp_yaml_path=opt.hyp
+
+    with open(data_yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
+
+    with open(hyp_yaml_path, 'r') as f:
+        hyp = yaml.safe_load(f)
+    
+    gs = max(int(model.stride.max()), 32)
+
+    val_loader =  create_dataloader(data['val'],
+                                       opt.imgsz,
+                                       opt.batch_size,
+                                       gs,
+                                       opt.single_cls,
+                                       hyp=hyp,
+                                       cache=None if opt.noval else opt.cache,
+                                       rect=True,
+                                       rank=-1,
+                                       workers=opt.workers * 2,
+                                       pad=0.5,
+                                       prefix=colorstr('val: '))[0]
+    return val_loader
 
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
@@ -58,13 +96,18 @@ def process_batch(detections, labels, iouv):
             correct[matches[:, 1].astype(int), i] = True
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
 
+
+
 class YOLOv9LightningModule(pl.LightningModule):
     def __init__(self, lr=1e-3):
         super(YOLOv9LightningModule, self).__init__()
-        self.loss_fn, self.gs, self.imgsz, self.model_device, self.amp, self.yolo_model, self.data_dict, self.ema = gs.get_model(opt)
+        self.opt = get_opt()
+        self.loss_fn, self.gs, self.imgsz, self.model_device, self.amp, self.yolo_model, self.data_dict, _ = gm.get_model(self.opt)
         self.lr = lr
         self.train_outputs = []
         self.val_outputs = []
+
+        self.ema = ModelEMA(self.yolo_model)
 
         self.seen = 0
 
@@ -85,29 +128,19 @@ class YOLOv9LightningModule(pl.LightningModule):
             self.mloss = loss_items  # Khởi tạo mloss cho epoch mới
         else:
             self.mloss = (self.mloss * batch_idx + loss_items) / (batch_idx + 1)
+        if self.ema:
+            self.ema.update(self.yolo_model)
 
         self.train_outputs.append({"box_loss": self.mloss[0].item(), "obj_loss": self.mloss[1].item(), "cls_loss": self.mloss[2].item()})
         return loss
 
-    # def validation_step(self, batch, batch_idx):
-    #     loss, acc, loss_items = self._common_step(batch, batch_idx)
-    #     self.val_outputs.append({"loss": loss, "acc": acc})
-    #     return loss
     def validation_step(self, batch, batch_idx):
-        # Perform common validation step (e.g., forward pass, loss calculation)
         loss, acc, loss_items = self._common_step(batch, batch_idx)
 
         imgs, targets, paths, shapes = batch
-        # model_eval = self.yolo_model
         model_eval = copy.deepcopy(self.yolo_model)
-        # training = model_eval is not None
-        # half=True
-        # if training: 
-        #     half &= self.model_device.type != 'cpu'
-        #     model_eval.half() if half else model_eval.float() 
-        # else: 
-        #     print("Done't have model")
-        #     return
+        # half = True
+        # model_eval.half() if half else model_eval.float()
         
         model_eval.eval()  
         self.names = model_eval.names if hasattr(model_eval, 'names') else model_eval.module.names  # get class names
@@ -118,18 +151,18 @@ class YOLOv9LightningModule(pl.LightningModule):
             if self.cuda:
                 imgs = imgs.to(self.model_device, non_blocking=True).float()
                 targets = targets.to(self.model_device)
-            # imgs = imgs.half() if half else imgs.float()  # uint8 to fp16/32
-            imgs /= 255  # 0 - 255 to 0.0 - 1.0
+            imgs /= 255  
             nb, _, height, width = imgs.shape
 
         with self.dt[1]:
             with torch.no_grad():
-                preds, train_out = model_eval(imgs) if self.loss_fn else (model_eval(imgs, augment=True), None)
+                preds, train_out = model_eval(imgs)
+                # preds, train_out = model_eval(imgs) if self.loss_fn else (model_eval(imgs, augment=True), None)
         
         # NMS
         save_hybrid = False
-        conf_thres = 0.001
-        iou_thres = 0.7
+        conf_thres = 0.25
+        iou_thres = 0.0001
         max_det = 300
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.model_device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
@@ -139,13 +172,17 @@ class YOLOv9LightningModule(pl.LightningModule):
                                         iou_thres,
                                         labels=lb,
                                         multi_label=True,
-                                        agnostic=opt.single_cls,
+                                        agnostic=self.opt.single_cls,
                                         max_det=max_det)
 
         for si, pred in enumerate(preds):
+            # if si >= len(paths) or si >= len(shapes):
+            #     print(f"Warning: si={si} exceeds available paths/shapes length.")
+            #     continue
             self.seen += 1
-            labels = targets[targets[:, 0] == si, 1:]  
-            nl, npr = labels.shape[0], pred.shape[0] 
+            labels = targets[targets[:, 0] == si, 1:] 
+            nl, npr = labels.shape[0], pred.shape[0]
+            # path, shape = Path(paths[si]), shapes[si][0]
             correct = torch.zeros(npr, self.niou, dtype=torch.bool, device=self.model_device) 
 
             if npr == 0:
@@ -153,15 +190,17 @@ class YOLOv9LightningModule(pl.LightningModule):
                     self.stats.append((correct, *torch.zeros((2, 0), device=self.model_device), labels[:, 0]))
                 continue
 
-            if opt.single_cls:
+            if self.opt.single_cls:
                 pred[:, 5] = 0
 
             predn = pred.clone()  
+            # scale_boxes(imgs[si].shape[1:], predn[:, :4], shape, shapes[si][1])
 
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  
+                # scale_boxes(imgs[si].shape[1:], tbox, shape, shapes[si][1])
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  
-                correct = process_batch(predn, labelsn, self.iouv)  
+                correct = process_batch(predn, labelsn, self.iouv) 
             self.stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  
 
         return loss
@@ -181,23 +220,34 @@ class YOLOv9LightningModule(pl.LightningModule):
 
         img_size = self.imgsz
 
-        print(f"{'Epoch':>7} {'GPU_mem':>9} {'box_loss':>10} {'obj_loss':>10} {'cls_loss':>10} {'Instances':>12} {'Size':>8}")
+        print(f"\n\n{'Epoch':>7} {'GPU_mem':>9} {'box_loss':>10} {'obj_loss':>10} {'cls_loss':>10} {'Instances':>12} {'Size':>8}")
         # Print values in the next line, aligned under the headers
-        print(f"{self.current_epoch + 1}/{opt.epochs:<5} {mem:>9} {avg_box_loss:>10.5f} {avg_obj_loss:>10.5f} "
+        print(f"\n{self.current_epoch + 1}/{self.opt.epochs:<5} {mem:>9} {avg_box_loss:>10.5f} {avg_obj_loss:>10.5f} "
             f"{avg_cls_loss:>10.5f} {total_instances:>12} {img_size:>8}")
         
         self.seen = 0
         self.train_outputs.clear()
 
-    # def on_validation_epoch_end(self):
-    #     results = (0, 0, 0, 0, 0, 0, 0)  # P, R, mAP@.5, mAP@.5-.95, val_loss(box, obj, cls)
+        self.ema.update_attr(self.yolo_model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
+        results, maps, _ = validate.run(self.data_dict,
+                                                batch_size=self.opt.batch_size,
+                                                imgsz=self.imgsz,
+                                                half=self.amp,
+                                                task = 'val',
+                                                model=self.ema.ema,
+                                                single_cls=self.opt.single_cls,
+                                                dataloader=get_data(self.yolo_model),
+                                                save_dir=self.opt.save_dir,
+                                                plots=False,
+                                                compute_loss=self.loss_fn)
+        # print(type(results))
+        mp, mr, map50, mAP= results[:4]
+        print(f"\n\n{'P':>10} {'R':>10} {'mAP50':>10} {'mAP':>10}")
 
-    #     # avg_val_loss = torch.stack([x["loss"] for x in self.val_outputs]).mean()
-    #     # avg_val_acc = torch.stack([x["acc"] for x in self.val_outputs]).mean()
+        # Print the values in the next line, aligned under the headers
+        print(f"\n{mp:>10.3f} {mr:>10.3f} {map50:>10.3f} {mAP:>10.3f}")
+        print("\n\n", results)
 
-    #     # print(f"/n/nEpoch {self.current_epoch}: Val Loss: {avg_val_loss:.4f}, Val Accuracy: {avg_val_acc:.4f}")
-        
-    #     self.val_outputs.clear()
 
     def on_validation_epoch_end(self):
         tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
@@ -210,15 +260,15 @@ class YOLOv9LightningModule(pl.LightningModule):
             ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
             mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
 
-        nc = 1 if opt.single_cls else self.data_dict['nc']
+        nc = 1 if self.opt.single_cls else self.data_dict['nc']
         nt = np.bincount(self.stats[3].astype(int), minlength=nc)  # Count number of targets per class
 
         # Log results
         # Print the header
-        print(f"{'Class':>10} {'Images':>10} {'Instances':>10} {'P':>10} {'R':>10} {'mAP50':>10} {'mAP':>10}")
+        # print(f"{'Class':>10} {'Images':>10} {'Instances':>10} {'P':>10} {'R':>10} {'mAP50':>10} {'mAP':>10}")
 
-        # Print the values in the next line, aligned under the headers
-        print(f"{'':>10} {'all':>10} {self.seen:>10} {nt.sum():>10} {mp:>10.3f} {mr:>10.3f} {map50:>10.3f} {map:>10.3f}")
+        # # Print the values in the next line, aligned under the headers
+        # print(f"{'':>10} {'all':>10} {self.seen:>10} {nt.sum():>10} {mp:>10.3f} {mr:>10.3f} {map50:>10.3f} {map:>10.3f}")
 
 
         # Clear stats for the next epoch
@@ -227,7 +277,7 @@ class YOLOv9LightningModule(pl.LightningModule):
     def _common_step(self, batch, batch_idx):
         imgs, self.targets, paths, _ = batch
         imgs = imgs.to(self.model_device, non_blocking=True).float() / 255
-        if opt.multi_scale:
+        if self.opt.multi_scale:
             sz = random.randrange(self.imgsz * 0.5, self.imgsz * 1.5 + self.gs) // self.gs * self.gs
             sf = sz / max(imgs.shape[2:])
             if sf != 1:
@@ -249,7 +299,7 @@ class YOLOv9LightningModule(pl.LightningModule):
             loss_items = _loss_item[0] if len(_loss_item) == 1 else get_average_tensor(_loss_item)
             if RANK != -1:
                 loss *= WORLD_SIZE
-            if opt.quad:
+            if self.opt.quad:
                 loss *= 4.
 
             acc = self._calculate_accuracy(model_outputs, self.targets)
@@ -264,3 +314,6 @@ class YOLOv9LightningModule(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
+
+# if __name__ == '__main__':
+#     pass

@@ -114,10 +114,11 @@ def train(hyp, opt, device, callbacks):
     
     if pretrained:
         if basemodel.lower() == 'v7':
-            with torch_distributed_zero_first(LOCAL_RANK):
-                weights = loadV7(weights)  # download if not found locally
-            ckpt = torch.load(weights, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
-            model = ModelV7(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'), headlayers=headlayers).to(device)  # create
+            pass
+            # with torch_distributed_zero_first(LOCAL_RANK):
+            #     weights = loadV7(weights)  # download if not found locally
+            # ckpt = torch.load(weights, map_location='cpu')  # load checkpoint to CPU to avoid CUDA memory leak
+            # model = ModelV7(opt.cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'), headlayers=headlayers).to(device)  # create
             
         elif basemodel.lower() == 'v9':
             with torch_distributed_zero_first(LOCAL_RANK):
@@ -134,7 +135,8 @@ def train(hyp, opt, device, callbacks):
         LOGGER.info(f'----- Transferred {len(csd)}/{len(model.state_dict())} items from {weights} -----')  # report
     else:
         if basemodel.lower() == 'v7':
-            model = ModelV7(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), headlayers=headlayers).to(device)  # create
+            pass
+            # model = ModelV7(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), headlayers=headlayers).to(device)  # create
         elif basemodel.lower() == 'v9':
             model = ModelV9(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # created
         else:
