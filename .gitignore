@@ -170,3 +170,7 @@ yoloxyz/pytorch_lightning/test.py
 
 # Datasets
 datasets/
+
+# Rar
+*.rar
+*.zip

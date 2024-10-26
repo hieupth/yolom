@@ -137,71 +137,71 @@ class YOLOv9LightningModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, acc, loss_items = self._common_step(batch, batch_idx)
 
-        imgs, targets, paths, shapes = batch
-        model_eval = copy.deepcopy(self.yolo_model)
-        # half = True
-        # model_eval.half() if half else model_eval.float()
+        # imgs, targets, paths, shapes = batch
+        # model_eval = copy.deepcopy(self.yolo_model)
+        # # half = True
+        # # model_eval.half() if half else model_eval.float()
         
-        model_eval.eval()  
-        self.names = model_eval.names if hasattr(model_eval, 'names') else model_eval.module.names  # get class names
-        if isinstance(self.names, (list, tuple)):  # old format
-            self.names = dict(enumerate(self.names))
+        # model_eval.eval()  
+        # self.names = model_eval.names if hasattr(model_eval, 'names') else model_eval.module.names  # get class names
+        # if isinstance(self.names, (list, tuple)):  # old format
+        #     self.names = dict(enumerate(self.names))
 
-        with self.dt[0]:
-            if self.cuda:
-                imgs = imgs.to(self.model_device, non_blocking=True).float()
-                targets = targets.to(self.model_device)
-            imgs /= 255  
-            nb, _, height, width = imgs.shape
+        # with self.dt[0]:
+        #     if self.cuda:
+        #         imgs = imgs.to(self.model_device, non_blocking=True).float()
+        #         targets = targets.to(self.model_device)
+        #     imgs /= 255  
+        #     nb, _, height, width = imgs.shape
 
-        with self.dt[1]:
-            with torch.no_grad():
-                preds, train_out = model_eval(imgs)
-                # preds, train_out = model_eval(imgs) if self.loss_fn else (model_eval(imgs, augment=True), None)
+        # with self.dt[1]:
+        #     with torch.no_grad():
+        #         preds, train_out = model_eval(imgs)
+        #         # preds, train_out = model_eval(imgs) if self.loss_fn else (model_eval(imgs, augment=True), None)
         
-        # NMS
-        save_hybrid = False
-        conf_thres = 0.25
-        iou_thres = 0.0001
-        max_det = 300
-        targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.model_device)  # to pixels
-        lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
-        with self.dt[2]:
-            preds = non_max_suppression(preds,
-                                        conf_thres,
-                                        iou_thres,
-                                        labels=lb,
-                                        multi_label=True,
-                                        agnostic=self.opt.single_cls,
-                                        max_det=max_det)
+        # # NMS
+        # save_hybrid = False
+        # conf_thres = 0.25
+        # iou_thres = 0.0001
+        # max_det = 300
+        # targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.model_device)  # to pixels
+        # lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
+        # with self.dt[2]:
+        #     preds = non_max_suppression(preds,
+        #                                 conf_thres,
+        #                                 iou_thres,
+        #                                 labels=lb,
+        #                                 multi_label=True,
+        #                                 agnostic=self.opt.single_cls,
+        #                                 max_det=max_det)
 
-        for si, pred in enumerate(preds):
-            # if si >= len(paths) or si >= len(shapes):
-            #     print(f"Warning: si={si} exceeds available paths/shapes length.")
-            #     continue
-            self.seen += 1
-            labels = targets[targets[:, 0] == si, 1:] 
-            nl, npr = labels.shape[0], pred.shape[0]
-            # path, shape = Path(paths[si]), shapes[si][0]
-            correct = torch.zeros(npr, self.niou, dtype=torch.bool, device=self.model_device) 
+        # for si, pred in enumerate(preds):
+        #     # if si >= len(paths) or si >= len(shapes):
+        #     #     print(f"Warning: si={si} exceeds available paths/shapes length.")
+        #     #     continue
+        #     self.seen += 1
+        #     labels = targets[targets[:, 0] == si, 1:] 
+        #     nl, npr = labels.shape[0], pred.shape[0]
+        #     # path, shape = Path(paths[si]), shapes[si][0]
+        #     correct = torch.zeros(npr, self.niou, dtype=torch.bool, device=self.model_device) 
 
-            if npr == 0:
-                if nl:
-                    self.stats.append((correct, *torch.zeros((2, 0), device=self.model_device), labels[:, 0]))
-                continue
+        #     if npr == 0:
+        #         if nl:
+        #             self.stats.append((correct, *torch.zeros((2, 0), device=self.model_device), labels[:, 0]))
+        #         continue
 
-            if self.opt.single_cls:
-                pred[:, 5] = 0
+        #     if self.opt.single_cls:
+        #         pred[:, 5] = 0
 
-            predn = pred.clone()  
-            # scale_boxes(imgs[si].shape[1:], predn[:, :4], shape, shapes[si][1])
+        #     predn = pred.clone()  
+        #     # scale_boxes(imgs[si].shape[1:], predn[:, :4], shape, shapes[si][1])
 
-            if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  
-                # scale_boxes(imgs[si].shape[1:], tbox, shape, shapes[si][1])
-                labelsn = torch.cat((labels[:, 0:1], tbox), 1)  
-                correct = process_batch(predn, labelsn, self.iouv) 
-            self.stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  
+        #     if nl:
+        #         tbox = xywh2xyxy(labels[:, 1:5])  
+        #         # scale_boxes(imgs[si].shape[1:], tbox, shape, shapes[si][1])
+        #         labelsn = torch.cat((labels[:, 0:1], tbox), 1)  
+        #         correct = process_batch(predn, labelsn, self.iouv) 
+        #     self.stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  
 
         return loss
 
@@ -250,18 +250,18 @@ class YOLOv9LightningModule(pl.LightningModule):
 
 
     def on_validation_epoch_end(self):
-        tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        # tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-        # Concatenate stats across batches
-        self.stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]
+        # # Concatenate stats across batches
+        # self.stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]
         
-        if len(self.stats) and self.stats[0].any():
-            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*self.stats, names=self.names)
-            ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-            mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        # if len(self.stats) and self.stats[0].any():
+        #     tp, fp, p, r, f1, ap, ap_class = ap_per_class(*self.stats, names=self.names)
+        #     ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        #     mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
 
-        nc = 1 if self.opt.single_cls else self.data_dict['nc']
-        nt = np.bincount(self.stats[3].astype(int), minlength=nc)  # Count number of targets per class
+        # nc = 1 if self.opt.single_cls else self.data_dict['nc']
+        # nt = np.bincount(self.stats[3].astype(int), minlength=nc)  # Count number of targets per class
 
         # Log results
         # Print the header
