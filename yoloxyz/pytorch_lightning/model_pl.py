@@ -40,7 +40,8 @@ def get_data(model):
     with open(hyp_yaml_path, 'r') as f:
         hyp = yaml.safe_load(f)
     
-    gs = max(int(model.stride.max()), 32)
+    # gs = max(int(model.stride.max()), 32)
+    gs = 32
 
     val_loader =  create_dataloader(data['val'],
                                        opt.imgsz,
