@@ -174,3 +174,6 @@ datasets/
 # Rar
 *.rar
 *.zip
+
+# log
+lightning_logs/
