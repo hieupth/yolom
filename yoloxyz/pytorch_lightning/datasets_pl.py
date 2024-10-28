@@ -5,6 +5,7 @@ sys.path.append("D:/FPT/AI/Major6/OJT_yolo/yoloxyz")
 import pytorch_lightning as pl
 from backbones.yolov9.utils.dataloaders import create_dataloader
 from backbones.yolov9.utils.general import colorstr
+from arguments import training_arguments
 
 class CustomDataModule(pl.LightningDataModule):
     def __init__(self, opt, data_yaml_path, hyp_yaml_path):
@@ -53,3 +54,15 @@ class CustomDataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         return self.val_loader
+
+if __name__ == '__main__':
+    opt = training_arguments(True)
+    train_data = CustomDataModule(
+        data_yaml_path=opt.data,
+        opt = opt,
+        hyp_yaml_path=opt.hyp
+    )
+
+    idx = 0  # Ví dụ chỉ số cần truy cập
+    img_path, label_path = train_data[idx]
+    # print("Image Path:", image)

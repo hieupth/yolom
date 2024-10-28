@@ -4,12 +4,17 @@ sys.path.append(os.path.join(os.getcwd(), "yoloxyz"))
 import torch
 import math
 import random
+import yaml
 from pytorch_lightning_ver2.arguments import training_arguments
 import pytorch_lightning as pl
 from backbones.yolov9.models.experimental import attempt_load
-from pytorch_lightning_ver2.CustomeData import CustomDataModule
+from pytorch_lightning_ver2.CustomData import CustomDataModule
 import torch.nn as nn
 from backbones.yolov9.utils.loss_tal_dual import ComputeLoss
+from torch.optim import lr_scheduler
+from backbones.yolov9.utils.torch_utils import smart_optimizer
+from backbones.yolov9.utils.general import one_cycle, one_flat_cycle
+from backbones.yolov9.utils.torch_utils import ModelEMA
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -24,11 +29,19 @@ class YOLOv9LightningModel(pl.LightningModule):
         self.gs = gs
         self.model_device = model_device
         self.computeLoss = computeLoss(model)
+        self.ema_model = None
+        self.ema = True
+
+        self.automatic_optimization = False
     
     def forward(self, x):
-        return self.model(x)
+        self.model.eval()
+        detections = self.model(x)
+        return detections
     
     def on_train_epoch_start(self):
+        if self.ema is True:
+            self.ema_model = ModelEMA(self.model)
         self.mloss = torch.zeros(3, device=self.model_device)
         self.train_outputs = []
 
@@ -47,7 +60,15 @@ class YOLOv9LightningModel(pl.LightningModule):
 
         self.train_outputs.append({"box_loss": self.mloss[0].item(), "obj_loss": self.mloss[1].item(), 
                                    "cls_loss": self.mloss[2].item(), "total_instances": total_instances})
-        return loss
+        # Backward
+        optimizer = self.optimizers()
+        optimizer.zero_grad()
+        self.manual_backward(loss)
+        optimizer.step()
+        if self.ema is True:
+            self.ema_model.update(self.model)
+        self.lr_schedulers().step()
+        return {"loss": loss, "box_loss": self.mloss[0].item(), "obj_loss": self.mloss[1].item(), "cls_loss": self.mloss[2].item()}
     
     def on_train_epoch_end(self):
         avg_box_loss = torch.tensor([x["box_loss"] for x in self.train_outputs]).mean()
@@ -62,7 +83,15 @@ class YOLOv9LightningModel(pl.LightningModule):
             f"{avg_cls_loss:>10.5f} {avg_total_instances:>12} {self.opt.imgsz:>8}")
         
         self.train_outputs.clear()
-        
+    
+    def validation_step(self, batch, batch_idx):
+        images, targets, paths, _ = batch
+        loss, loss_items = self.compute_loss(images, targets)
+        if self.ema_model is not None:
+            model = self.ema_model.ema
+        else:
+            model = self.model
+        return loss
     
     def compute_loss(self, images, targets):
         imgs = images.to(self.model_device, non_blocking=True).float() / 255
@@ -73,7 +102,7 @@ class YOLOv9LightningModel(pl.LightningModule):
             if sf != 1:
                 ns = [math.ceil(x * sf / self.gs) * self.gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                 imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
-        pred = model(imgs)
+        pred = self.model(imgs)
         # print(pred[0])
         loss, loss_items = self.computeLoss(pred, targets.to(self.model_device))  # loss scaled by batch_size
         if RANK != -1:
@@ -83,7 +112,21 @@ class YOLOv9LightningModel(pl.LightningModule):
         return loss, loss_items
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=0.001)
+        with open(self.opt.hyp, errors='ignore') as f:
+            hyp = yaml.safe_load(f)
+        optimizer = smart_optimizer(self.model, self.opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
+        
+        if self.opt.cos_lr:
+            lf = one_cycle(1, hyp['lrf'], self.opt.epochs)  # cosine 1->hyp['lrf']
+        elif self.opt.flat_cos_lr:
+            lf = one_flat_cycle(1, hyp['lrf'], self.opt.epochs)  # flat cosine 1->hyp['lrf']        
+        elif self.opt.fixed_lr:
+            lf = lambda x: 1.0
+        else:
+            lf = lambda x: (1 - x / self.opt.epochs) * (1.0 - hyp['lrf']) + hyp['lrf']
+
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+        return [optimizer], [scheduler]
     
 from pytorch_lightning import Trainer
 
@@ -96,6 +139,5 @@ if __name__ == '__main__':
     model = YOLOv9LightningModel(model, opt = opt, gs = gs, model_device = device)
     trainer = Trainer(max_epochs=2)
     trainer.fit(model, data_module)
-
 
 
