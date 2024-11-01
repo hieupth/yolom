@@ -165,11 +165,12 @@ weights
 yoloxyz/runs/
 
 #file test
-yoloxyz/pytorch_lightning/test.ipynb
-yoloxyz/pytorch_lightning/test.py
+test.ipynb
+test.py
 
 # Datasets
 datasets/
+pytorch_lightning_ver2/
 
 # Rar
 *.rar

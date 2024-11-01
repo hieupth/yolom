@@ -1,11 +1,14 @@
 import os
 import sys
-sys.path.append(os.path.join(os.getcwd(), "yoloxyz"))
+from pathlib import Path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
 import torch
 import math
 import random
 import yaml
-from pytorch_lightning_ver2.arguments import training_arguments
+import copy
+from yoloxyz.pytorch_lightning_ver2.CustomArguments import training_arguments
 import pytorch_lightning as pl
 from backbones.yolov9.models.experimental import attempt_load
 from pytorch_lightning_ver2.CustomData import CustomDataModule
@@ -13,7 +16,7 @@ import torch.nn as nn
 from backbones.yolov9.utils.loss_tal_dual import ComputeLoss
 from torch.optim import lr_scheduler
 from backbones.yolov9.utils.torch_utils import smart_optimizer
-from backbones.yolov9.utils.general import one_cycle, one_flat_cycle
+from backbones.yolov9.utils.general import one_cycle, one_flat_cycle, Profile
 from backbones.yolov9.utils.torch_utils import ModelEMA
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
@@ -33,6 +36,9 @@ class YOLOv9LightningModel(pl.LightningModule):
         self.ema = True
 
         self.automatic_optimization = False
+        # self.vec2box = create_converter(
+        #     self.cfg.model.name, self.model, self.cfg.model.anchor, self.cfg.image_size, self.device
+        # )
     
     def forward(self, x):
         self.model.eval()
@@ -47,7 +53,7 @@ class YOLOv9LightningModel(pl.LightningModule):
 
 
     def training_step(self, batch, batch_idx):
-        images, targets, paths, _ = batch
+        images, targets, *_ = batch
         loss, loss_items = self.compute_loss(images, targets)
 
         if isinstance(targets, dict):
@@ -84,13 +90,28 @@ class YOLOv9LightningModel(pl.LightningModule):
         
         self.train_outputs.clear()
     
+    # def on_validation_epoch_start(self):
+    #     if self.ema_model is not None:
+    #         self.model_eval = copy.deepcopy(self.ema_model.ema)
+    #     else:
+    #         self.model_eval = copy.deepcopy(self.model)    
+    #     self.half = bool(self.model_device.type != 'cpu')
+    #     self.model_eval.half() if self.half else self.model_eval.float()
+    #     self.model_eval.eval()
+    #     self.tp, self.fp, self.p, self.r, self.f1, self.mp, self.mr, self.map50, self.ap50, self.map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    #     self.dt = Profile(), Profile(), Profile()  # profiling times
+    #     self.val_loss = torch.zeros(3, device=self.model_device)
+    #     self.jdict, self.stats, self.ap, self.ap_class = [], [], [], []
+
     def validation_step(self, batch, batch_idx):
-        images, targets, paths, _ = batch
+        images, targets, *_ = batch
         loss, loss_items = self.compute_loss(images, targets)
-        if self.ema_model is not None:
-            model = self.ema_model.ema
-        else:
-            model = self.model
+        # if self.ema_model is not None:
+        #     self.model_eval = copy.deepcopy(self.ema_model.ema)
+        # else:
+        #     self.model_eval = ModelEMA(self.model)
+        # detections = self.model_eval(images, targets)
+        # print(detections)
         return loss
     
     def compute_loss(self, images, targets):
@@ -134,10 +155,11 @@ if __name__ == '__main__':
     opt = training_arguments(True)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = attempt_load("C:/Users/admin/Desktop/datasets/yolov9-c.pt", device)
+
     gs = max(int(model.stride.max()), 32)
     data_module = CustomDataModule(model= model, opt = opt, gs = gs)
     model = YOLOv9LightningModel(model, opt = opt, gs = gs, model_device = device)
-    trainer = Trainer(max_epochs=2)
+    trainer = Trainer(max_epochs=1)
     trainer.fit(model, data_module)
 
 
