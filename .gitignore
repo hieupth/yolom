@@ -164,6 +164,7 @@ weights
 #Runs
 runs/
 wandb/
+!/yolo_ptln/utils/loggers/wandb/
 
 #file test
 test.ipynb
