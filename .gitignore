@@ -162,7 +162,8 @@ weights
 
 
 #Runs
-yoloxyz/runs/
+runs/
+wandb/
 
 #file test
 test.ipynb
@@ -178,3 +179,4 @@ pytorch_lightning_ver2/
 
 # log
 lightning_logs/
+output/
