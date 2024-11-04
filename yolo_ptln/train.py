@@ -189,7 +189,7 @@ def main(opt):
     loss_fn = {
                 opt.detect_layer : ComputeLoss(model) # Default
             }
-    lit_yolo = LitYOLO(opt = opt, cfg=hyp, model=model, model_device = device, dist=dist, gs = gs, imgsz = opt.imgsz, multi_scale = opt.multi_scale, optimizer = optimizer, scheduler = scheduler)
+    lit_yolo = LitYOLO(opt = opt, cfg=hyp, model=model, model_device = device, dist=dist, gs = gs, imgsz = opt.imgsz, num_classes = num_classes, multi_scale = opt.multi_scale, optimizer = optimizer, scheduler = scheduler)
 
     # Create callback functions
     model_checkpoint = ModelCheckpoint(save_top_k=3,
@@ -217,7 +217,7 @@ def main(opt):
     trainer.fit(
         model=lit_yolo, 
         train_dataloaders=train_loader, 
-        val_dataloaders=val_loader if opt.do_eval else None
+        val_dataloaders=val_loader
     )
     
     # Saves only on the main process    
