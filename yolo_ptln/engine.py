@@ -8,7 +8,9 @@ from pathlib import Path
 
 from utils.metrics import ConfusionMatrix, box_iou, ap_per_class
 from utils.general import LOGGER, Profile, non_max_suppression, scale_boxes, xywh2xyxy, xyxy2xywh
-from utils.loss_tal_dual import ComputeLoss 
+from utils.loss_tal_dual import ComputeLoss
+# from utils.loss_tal import ComputeLoss 
+from utils.plots import plot_images, output_to_target
 from lightning.pytorch import LightningModule
 
 class LitYOLO(LightningModule):
@@ -32,7 +34,7 @@ class LitYOLO(LightningModule):
         self.mloss = torch.zeros(3, device=model_device)  # mean losses
         self.model = model
         self.model_device = model_device
-        self.loss_fn = loss_fn if loss_fn else ComputeLoss(self.model)
+        self.loss_fn = loss_fn if loss_fn else ComputeLoss(model)
         self.gs = gs
         self.imgsz = imgsz
         self.multi_scale = multi_scale
@@ -49,9 +51,11 @@ class LitYOLO(LightningModule):
 
         self.log('train/loss', loss, on_epoch=True, on_step=False, prog_bar=True, logger=True, sync_dist=self.dist)
 
-        if self.mloss.device != loss_item.device:
-            self.mloss = self.mloss.to(loss_item)
+        # if self.mloss.device != loss_item.device:
+        # self.mloss = self.mloss.to(loss_item)
         self.mloss = (self.mloss * batch_idx + loss_item) / (batch_idx + 1) 
+        with open(r"C:\Users\admin\Desktop\fake3.txt", "a") as f:
+            f.write(f"batch_i {batch_idx}: len(preds) {self.mloss}\n")
 
         for idx, x in enumerate(['box', 'obj', 'cls']):
             self.log(
@@ -66,44 +70,55 @@ class LitYOLO(LightningModule):
 
         return loss
     
-    def on_train_epoch_end(self):
+    def on_train_epoch_start(self):
         self.mloss = torch.zeros(3, device=self.model_device)
     
     def on_validation_epoch_start(self):
         LOGGER.info(f'\nValidating...\n')
-        self.model_eval = copy.deepcopy(self.model)
-        half = self.model_eval.type != 'cpu'
-        self.model_eval.half() if half else self.model_eval.float()
-
-        self.model_eval.eval()
         self.cuda = self.model_device.type != 'cpu'
 
-        self.tp, self.fp, self.p, self.r, self.f1, self.mp, self.mr, self.map50, self.ap50, self.map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         self.dt = Profile(), Profile(), Profile()
         self.val_loss = torch.zeros(3, device=self.model_device)
         self.stats, self.jdict, self.ap_class = [], [], []
         self.confusion_matrix = ConfusionMatrix(nc=self.num_classes)
         self.seen = 0
+        self.val_idx = 0
+        with open(r"C:\Users\admin\Desktop\fake1.txt", "a") as f:
+            f.write(f"\n\n\n------------------------------------------------------\n")
 
-    def validation_step(self, batch, batch_idx, conf_thres=0.001, iou_thres=0.6, max_det=300,
+    def validation_step(self, batch, batch_idx, conf_thres=0.001, iou_thres= 0.6, max_det=300,
                         save_hybrid = False, augment = False, single_cls= False, plots = True,
                         save_txt = False, save_json = False, save_conf = False, save_dir=Path('')):
-        # self.log('run val')
+        self.val_idx += 1
         im, targets, paths, shapes = batch
-        # loss, loss_item = self.compute_loss(imgs, targets)
-        half = self.model_eval.type != 'cpu'
-        with self.dt[0]:
-            if self.cuda:
-                im = im.to(self.model_device, non_blocking=True)
-                targets = targets.to(self.model_device)
-            im = im.half() if half else im.float()  # uint8 to fp16/32
-            im /= 255  # 0 - 255 to 0.0 - 1.0
-            nb, _, height, width = im.shape  # batch size, channels, height, width
+        
+        im = im.to(self.model_device, non_blocking=True).float() / 255
+        nb, _, height, width = im.shape
+
+        # with open(r"C:\Users\admin\Desktop\fake2.txt", "a") as f:
+        #     f.write(f"batch_i {batch_idx}: len(im) {len(im)}\n")
+        #     for idx, item in enumerate(im):
+        #         f.write(f"idx {idx}: {item} \n\n")
         
         # Inference
         with self.dt[1]:
-            preds, train_out = self.model_eval(im) if self.compute_loss else (self.model_eval(im, augment=augment), None)
+            # preds, train_out = self.model(im) if self.loss_fn else (self.model(im, augment=augment), None)
+            preds, train_out = self.model(im, augment=augment)
         
+        # with open(r"C:\Users\admin\Desktop\fake1.txt", "a") as f:
+        #     f.write(f"batch_i {batch_idx}: len(preds) {len(preds)}\n")
+        #     f.write(f"type of ans: {type(self.model(im))} -- {type(self.model(im, augment=augment))}")
+        #     for idx, item in enumerate(preds):
+        #         f.write(f"idx {idx}: {item} \n\n")
+
+        # Loss
+        if self.loss_fn:
+            preds = preds[1]
+            #train_out = train_out[1]
+            # self.val_loss += self.loss_fn(train_out, targets)[1]  # box, obj, cls
+        else:
+            preds = preds[0][1]
+
         # NMS
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.model_device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
@@ -142,9 +157,12 @@ class LitYOLO(LightningModule):
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
                 scale_boxes(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
+                # print("Predictions (predn):", predn)
+                # print("Ground Truth Labels (labelsn):", labelsn)
                 correct = process_batch(predn, labelsn, self.iouv)
                 if plots:
                     self.confusion_matrix.process_batch(predn, labelsn)
+        
             self.stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
             # Save/log
@@ -153,36 +171,76 @@ class LitYOLO(LightningModule):
             if save_json:
                 pass
                 # save_one_json(predn, self.jdict, path, class_map)
-
+        
         # return loss
 
     def on_validation_epoch_end(self, plots = True, save_dir=Path(''), verbose=False):
-        self.stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]  # to numpy
-        names = self.model_eval.names if hasattr(self.model_eval, 'names') else self.model_eval.module.names
-        if len(self.stats) and self.stats[0].any():
-            self.tp, self.fp, self.p, self.r, self.f1, self.ap, self.ap_class = ap_per_class(*self.stats, plot=plots, save_dir=save_dir, names=names)
-            self.ap50, self.ap = self.ap[:, 0], self.ap.mean(1)  # AP@0.5, AP@0.5:0.95
-            self.mp, self.mr, self.map50, self.map = self.p.mean(), self.r.mean(), self.ap50.mean(), self.ap.mean()
-        self.nt = np.bincount(self.stats[3].astype(int), minlength=self.num_classes) 
+        import datetime
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # with open(r"C:\Users\admin\Desktop\fake1.txt", "a") as f:
+        #     f.write(f"{now} len(stats) {len(self.stats)}\n")
+        #     for idx, item in enumerate(self.stats[-1]):
+        #         f.write(f"idx {idx}: {item} \n\n")
+
+        stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]  # to numpy
+
+        # with open(r"C:\Users\admin\Desktop\fake2.txt", "a") as f:
+        #     f.write(f"{now} len(stats) {len(stats)}\n")
+        #     for idx, item in enumerate(stats):
+        #         f.write(f"idex {idx}: {len(item)} \n")
+
+        names = self.model.names if hasattr(self.model, 'names') else self.model.module.names
+        tp, fp, p, r, f1, mp, mr, map50, ap50, map = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        if len(stats) and stats[0].any():
+            tp, fp, p, r, f1, ap, self.ap_class = ap_per_class(*stats, plot=plots, save_dir=save_dir, names=names)
+            ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+            mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        nt = np.bincount(stats[3].astype(int), minlength=self.num_classes) 
 
         # Print results
-        s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95\n')
+        s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
         LOGGER.info(s)
         pf = '%22s' + '%11i' * 2 + '%11.3g' * 4  # print format
-        LOGGER.info(pf % ('all', self.seen, self.nt.sum(), self.mp, self.mr, self.map50, self.map))
+        LOGGER.info(pf % ('all', self.seen, nt.sum(), mp, mr, map50, map))
 
-        if self.nt.sum() == 0:
+        if nt.sum() == 0:
             LOGGER.warning(f'WARNING ⚠️ no labels found in val set, can not compute metrics without labels')
 
         # Print results per class
-        training = self.model_eval is not None
-        if (verbose or (self.num_classes < 50 and not training)) and self.num_classes > 1 and len(self.stats):
+        training = self.model is not None
+        if (verbose or (self.num_classes < 50 and not training)) and self.num_classes > 1 and len(stats):
             for i, c in enumerate(self.ap_class):
-                LOGGER.info(pf % (names[c], self.seen, self.nt[c], self.p[i], self.r[i], self.ap50[i], self.ap[i]))
+                LOGGER.info(pf % (names[c], self.seen, nt[c], p[i], r[i], ap50[i], ap[i]))
 
-        self.model_eval.float() 
 
-        # return super().on_validation_batch_end(outputs, batch, batch_idx, dataloader_idx)
+        maps = np.zeros(self.num_classes) + map
+        for i, c in enumerate(self.ap_class):
+            maps[c] = ap[i]
+        loss = (self.val_loss.cpu() / self.val_idx).tolist()
+        print("log", self.val_loss, mp, mr, map50, map)
+        print(pf % ('all', self.seen, nt.sum(), mp, mr, map50, map))
+
+        # for idx, name in enumerate(['box_loss', 'obj_loss', 'cls_loss']):
+        #     self.log(
+        #         f"val/{name}", loss[idx],
+        #         on_epoch=True, 
+        #         on_step=False,
+        #         prog_bar=True, 
+        #         logger=True,
+        #         sync_dist=self.dist
+        #     )
+
+        # for _, (name, value) in enumerate(zip(['mp', 'mr', 'map50', 'map'], [mp, mr, map50, map])):
+        #     self.log(
+        #         f'val/{name}',
+        #         value,
+        #         on_epoch=True, 
+        #         on_step=False,
+        #         prog_bar=True, 
+        #         logger=True,
+        #         sync_dist=self.dist
+        #     ) 
+        return sum(loss) / len(loss)
     
     def compute_loss(self, images, targets):
         imgs = images.to(self.model_device, non_blocking=True).float() / 255
@@ -193,12 +251,19 @@ class LitYOLO(LightningModule):
                 ns = [math.ceil(x * sf / self.gs) * self.gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                 imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
         pred = self.model(imgs)
+        # with open(r"C:\Users\admin\Desktop\fake3.txt", "a") as f:
+        #     f.write(f"batch_i: len(preds) {len(pred)}\n")
+        #     for idx, item in enumerate(pred):
+        #         for i, ite in enumerate(item):
+        #             f.write(f"idx {idx} - {i}: {ite} \n\n")
+
         loss, loss_items = self.loss_fn(pred, targets.to(self.model_device))
         return loss, loss_items
 
     def configure_optimizers(self):
         # self.hparams available because we called self.save_hyperparameters()
-        return [self.optimizer], [self.scheduler]
+        optimizer, scheduler = self.optimizer, self.scheduler
+        return [optimizer], [scheduler]
 
 def process_batch(detections, labels, iouv):
     """

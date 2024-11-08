@@ -182,8 +182,10 @@ def main(opt):
     model.class_weights = labels_to_class_weights(dataset.labels, num_classes).to(device) * num_classes  # attach class weights
     model.names = names
 
-    optimizer = create_optimizer(model, opt.optimizer, hyp)
+    # optimizer = create_optimizer(model, opt.optimizer, hyp)
+    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
     scheduler = create_scheduler(optimizer, hyp, opt.epochs, opt.cos_lr, opt.flat_cos_lr, opt.fixed_lr)
+    
 
     gs = max(int(model.stride.max()), 32)
     loss_fn = {
@@ -216,8 +218,8 @@ def main(opt):
     LOGGER.info("*** Start training ***")
     trainer.fit(
         model=lit_yolo, 
-        train_dataloaders=train_loader, 
-        val_dataloaders=val_loader
+        train_dataloaders=train_loader
+        # val_dataloaders=val_loader
     )
     
     # Saves only on the main process    
