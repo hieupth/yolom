@@ -7,7 +7,7 @@ def training_arguments(known=False):
     # parser.add_argument('--data', type=str, default='D:/FPT/AI/Major6/OJT_yolo/datasets/data_new.yaml', help='data.yaml path')
     parser.add_argument('--data', type=str, default="C:/Users/admin/Desktop/Abjadyolov9/data.yaml", help='data.yaml path')
     parser.add_argument('--hyp', type=str, default='D:/FPT/AI/Major6/OJT_yolo/yoloxyz/backbones/yolov9/data/hyps/hyp.scratch-high.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=1, help='total training epochs')
+    parser.add_argument('--epochs', type=int, default=5, help='total training epochs')
     parser.add_argument('--batch-size', type=int, default=2, help='total batch size for all GPUs, -1 for autobatch')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=320, help='train, val image size (pixels)')
     parser.add_argument('--rect', action='store_true', help='rectangular training')

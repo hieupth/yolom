@@ -12,14 +12,12 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 from engine import LitYOLO
 from arguments import training_arguments
-from utils.loss_tal_dual import ComputeLoss
-from utils.torch_utils import select_device, torch_distributed_zero_first, smart_optimizer, de_parallel
-from utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, methods, labels_to_class_weights, increment_path, check_yaml, check_dataset, yaml_save
+from utils.torch_utils import select_device, torch_distributed_zero_first, de_parallel
+from utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset, yaml_save
 from utils.loggers import Loggers
 # from utils.callbacks import Callbacks
 from utils.downloads import attempt_download
 from models.yolo import Model as YOLO
-from models.model_util import create_optimizer, create_scheduler
 from utils.dataloaders import create_dataloader
 
 FILE = Path(__file__).resolve()
@@ -47,29 +45,10 @@ def main(opt):
     hyp['anchor_t'] = 5.0
     opt.hyp = hyp.copy()  # for saving hyps to checkpoints
 
-    # Hyperparameters
-    # with open(opt.hyp) as f:
-    #     hyp = yaml.load(f, Loader=yaml.SafeLoader)  # load hyps
-    # hyp.update(vars(opt))
-    
-    # with open(opt.data) as f:
-    #     data_dict = yaml.load(f, Loader=yaml.SafeLoader)  # data dict
-    
-    for k, v in hyp.items():
-        print(k, "\t", v)
-    
-    # if not opt.evolve:
-    #     yaml_save(save_dir / 'hyp.yaml', hyp)
-    #     yaml_save(save_dir / 'opt.yaml', vars(opt))
-
     # Loggers
     data_dict = None
     if RANK  in {-1, 0}:
         loggers = Loggers(save_dir, opt.weights, opt, hyp, LOGGER) 
-
-        # Register actions
-        # for k in methods(loggers):
-        #     callbacks.register_action(k, callback=getattr(loggers, k))
 
         # Process custom dataset artifact link
         data_dict = loggers.remote_dataset
@@ -81,7 +60,6 @@ def main(opt):
 
     wandb_logger = WandbLogger(project=opt.name, log_model="all")
 
-    dist = True if len(opt.device) > 1 else False
     plots = not opt.evolve  # create plots
     cuda = device.type != 'cpu'
     num_classes = 1 if opt.single_cls else int(data_dict['nc'])  # number of classes
@@ -106,8 +84,6 @@ def main(opt):
     # Freeze
     freeze = [f'model.{x}.' for x in (opt.freeze if len(opt.freeze) > 1 else range(opt.freeze[0]))]  # layers to freeze
     for k, v in model.named_parameters():
-        # v.requires_grad = True  # train all layers TODO: uncomment this line as in master
-        # v.register_hook(lambda x: torch.nan_to_num(x))  # NaN to 0 (commented for erratic training results)
         if any(x in k for x in freeze):
             LOGGER.info(f'freezing {k}')
             v.requires_grad = False
@@ -165,33 +141,18 @@ def main(opt):
                                        prefix=colorstr('val: '))[0]
 
         if not opt.resume:
-            # if not opt.noautoanchor:
-            #     check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)  # run AutoAnchor
             model.half().float()  # pre-reduce anchor precision
 
-        # callbacks.run('on_pretrain_routine_end', labels, names)
-
     # Model attributes
-    nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
-    #hyp['box'] *= 3 / nl  # scale to layers
-    #hyp['cls'] *= nc / 80 * 3 / nl  # scale to classes and layers
-    #hyp['obj'] *= (imgsz / 640) ** 2 * 3 / nl  # scale to image size and layers
+    dist = True if len(opt.device) > 1 else False
+    nl = de_parallel(model).model[-1].nl  
     hyp['label_smoothing'] = opt.label_smoothing
     model.nc = num_classes  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.class_weights = labels_to_class_weights(dataset.labels, num_classes).to(device) * num_classes  # attach class weights
     model.names = names
 
-    # optimizer = create_optimizer(model, opt.optimizer, hyp)
-    optimizer = smart_optimizer(model, opt.optimizer, hyp['lr0'], hyp['momentum'], hyp['weight_decay'])
-    scheduler = create_scheduler(optimizer, hyp, opt.epochs, opt.cos_lr, opt.flat_cos_lr, opt.fixed_lr)
-    
-
-    gs = max(int(model.stride.max()), 32)
-    loss_fn = {
-                opt.detect_layer : ComputeLoss(model) # Default
-            }
-    lit_yolo = LitYOLO(opt = opt, cfg=hyp, model=model, model_device = device, dist=dist, gs = gs, imgsz = opt.imgsz, num_classes = num_classes, multi_scale = opt.multi_scale, optimizer = optimizer, scheduler = scheduler)
+    lit_yolo = LitYOLO(opt = opt, model=model, model_device = device, num_classes = num_classes, hyp = hyp)
 
     # Create callback functions
     model_checkpoint = ModelCheckpoint(save_top_k=3,
@@ -201,25 +162,20 @@ def main(opt):
                         save_weights_only=True)
     
     opt.device = [int(x) for x in opt.device]
-    # Create Trainer
-    # trainer = Trainer(
-    #     max_epochs=opt.epochs,
-    #     accelerator=opt.accelerator,
-    #     devices=1,
-    #     callbacks=[model_checkpoint],
-    #     strategy='ddp_find_unused_parameters_true' if dist else 'auto',
-    #     log_every_n_steps=opt.log_steps,
-    #     logger=wandb_logger,
-    #     precision=16
-    # )
-    trainer = Trainer(max_epochs=opt.epochs)
+    trainer = Trainer(max_epochs=opt.epochs,
+                      accelerator=opt.accelerator,
+                      devices=1,
+                      callbacks=[model_checkpoint],
+                      strategy='ddp_find_unused_parameters_true' if dist else 'auto',
+                      log_every_n_steps=opt.log_steps,
+                      logger=wandb_logger)
 
     # if opt.do_train:
     LOGGER.info("*** Start training ***")
     trainer.fit(
         model=lit_yolo, 
-        train_dataloaders=train_loader
-        # val_dataloaders=val_loader
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader
     )
     
     # Saves only on the main process    
