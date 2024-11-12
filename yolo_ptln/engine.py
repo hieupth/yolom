@@ -18,16 +18,7 @@ RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 class LitYOLO(LightningModule):
-    def __init__(
-        self,
-        opt,
-        num_classes,
-        model,
-        model_device, 
-        hyp,
-        loss_fn=None,
-        dist:bool=False,      
-    ):
+    def __init__( self, opt, num_classes, model, model_device,  hyp, loss_fn=None ):
         super(LitYOLO, self).__init__()
         self.opt = opt
         self.dist = True if len(self.opt.device) > 1 else False
@@ -261,12 +252,12 @@ class LitYOLO(LightningModule):
         else:
             self.lf = lambda x: (1 - x / self.opt.epochs) * (1.0 - self.hyp['lrf']) + self.hyp['lrf']  # linear
         
-        # scheduler = create_scheduler(optimizer, self.hyp, self.opt.epochs, self.opt.cos_lr, self.opt.flat_cos_lr, self.opt.fixed_lr)    
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=self.lf)
         scheduler.last_epoch = -1
         self.optimizer = optimizer  # Save for manual control
         self.scheduler = scheduler 
         return [optimizer], [scheduler]
+
 
 def process_batch(detections, labels, iouv):
     """

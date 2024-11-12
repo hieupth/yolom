@@ -2,7 +2,6 @@ import os
 import sys
 import yaml
 import torch
-import logging
 import numpy as np
 from pathlib import Path
 
@@ -15,7 +14,6 @@ from arguments import training_arguments
 from utils.torch_utils import select_device, torch_distributed_zero_first, de_parallel
 from utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset, yaml_save
 from utils.loggers import Loggers
-# from utils.callbacks import Callbacks
 from utils.downloads import attempt_download
 from models.yolo import Model as YOLO
 from utils.dataloaders import create_dataloader
@@ -31,7 +29,6 @@ RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 def main(opt):
-    # callbacks.run('on_pretrain_routine_start')
     save_dir = Path(opt.save_dir)
     opt.cfg = check_file(opt.cfg)  # check file
     device = select_device(opt.device)
@@ -57,10 +54,8 @@ def main(opt):
 
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(opt.data) 
-
     wandb_logger = WandbLogger(project=opt.name, log_model="all")
 
-    plots = not opt.evolve  # create plots
     cuda = device.type != 'cpu'
     num_classes = 1 if opt.single_cls else int(data_dict['nc'])  # number of classes
     names = ['item'] if opt.single_cls and len(data_dict['names']) != 1 else data_dict['names']  # class names
