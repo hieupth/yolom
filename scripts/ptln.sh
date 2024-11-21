@@ -1,0 +1,16 @@
+python yoloxyz/train_ptln.py \
+    --basemodel 'v9' \
+    --weights weights/yolov9-c.pt \
+    --cfg yoloxyz/cfg/architecture/yolov9-c.yaml \
+    --hyp yoloxyz/cfg/hyp/hyp.scratch-high-v9.yaml \
+    --data datahub/gender2k/data.yaml \
+    --do-train \
+    --do-eval \
+    --name test_ptln_yolov9 \
+    --batch 4 \
+    --epochs 5 \
+    --imgsz 640 \
+    --device 0 \
+    --workers 2 \
+    --close-mosaic 15 \
+    --min-items 0

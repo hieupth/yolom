@@ -9,14 +9,17 @@ from lightning.pytorch import Trainer
 from lightning.pytorch.loggers import WandbLogger
 from lightning.pytorch.callbacks import ModelCheckpoint
 
+from yolov9.utils.torch_utils import select_device, torch_distributed_zero_first, de_parallel
+from yolov9.utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset
+from yolov9.utils.loggers import Loggers
+from yolov9.utils.downloads import attempt_download
+from yolov9.models.yolo import Model as YOLO
+from yolov9.utils.dataloaders import create_dataloader
+
 from engine import LitYOLO
 from arguments import training_arguments
-from utils.torch_utils import select_device, torch_distributed_zero_first, de_parallel
-from utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset, yaml_save
-from utils.loggers import Loggers
-from utils.downloads import attempt_download
-from models.yolo import Model as YOLO
-from utils.dataloaders import create_dataloader
+
+
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
@@ -27,6 +30,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
+
 
 def main(opt):
     save_dir = Path(opt.save_dir)
@@ -134,7 +138,7 @@ def main(opt):
                                        workers=opt.workers * 2,
                                        pad=0.5,
                                        prefix=colorstr('val: '))[0]
-
+        
         if not opt.resume:
             model.half().float()  # pre-reduce anchor precision
 
@@ -147,30 +151,35 @@ def main(opt):
     model.class_weights = labels_to_class_weights(dataset.labels, num_classes).to(device) * num_classes  # attach class weights
     model.names = names
 
-    lit_yolo = LitYOLO(opt = opt, model=model, model_device = device, num_classes = num_classes, hyp = hyp)
+    # Build Yolo Pyotrch Lightning
+    lit_yolo = LitYOLO(opt = opt, model=model, hyp = hyp)
 
     # Create callback functions
-    model_checkpoint = ModelCheckpoint(save_top_k=3,
-                        monitor="train/loss",
-                        mode="min", dirpath="output/",
+    model_checkpoint = ModelCheckpoint(
+                        save_top_k=3,
+                        monitor="val/loss",
+                        mode="min", dirpath=f'{opt.save_dir}/weights',
                         filename="sample-{epoch:02d}",
-                        save_weights_only=True)
+                        save_weights_only=True
+                    )
     
     opt.device = [int(x) for x in opt.device]
     trainer = Trainer(max_epochs=opt.epochs,
                       accelerator=opt.accelerator,
-                      devices=1,
+                      devices=opt.device,
                       callbacks=[model_checkpoint],
                       strategy='ddp_find_unused_parameters_true' if dist else 'auto',
                       log_every_n_steps=opt.log_steps,
-                      logger=wandb_logger)
+                      logger=wandb_logger,
+                      precision=16
+                    )
 
     # if opt.do_train:
-    LOGGER.info("*** Start training ***")
+    LOGGER.info("\n*** Start training ***\n")
     trainer.fit(
         model=lit_yolo, 
         train_dataloaders=train_loader,
-        val_dataloaders=val_loader
+        val_dataloaders=val_loader if opt.do_eval else None
     )
     
     # Saves only on the main process    
@@ -180,7 +189,7 @@ def main(opt):
     trainer.save_checkpoint(saved_ckpt_path)
     
     if opt.do_eval:
-        LOGGER.info("\n\n*** Evaluate ***")
+        LOGGER.info("\n*** Evaluate ***\n")
         trainer.devices = 0
         trainer.test(lit_yolo, dataloaders=val_loader, ckpt_path="best")
     
