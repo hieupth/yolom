@@ -20,8 +20,8 @@ from PIL import Image, ExifTags
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from yolov7.utils.torch_utils import torch_distributed_zero_first
-from yolov7.utils.general import xyxy2xywh, check_requirements, xyn2xy, segment2box, resample_segments, clean_str
+from backbones.yolov9.utils.torch_utils import torch_distributed_zero_first
+from backbones.yolov9.utils.general import xyxy2xywh, check_requirements, xyn2xy, segment2box, resample_segments, clean_str
 from multitasks.utils.general import xywh2xyxy, xywhn2xyxy
 
 # torch.set_printoptions(threshold=10_000)

@@ -159,3 +159,25 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 weights
+
+
+#Runs
+runs/
+wandb/
+!/yolo_ptln/utils/loggers/wandb/
+
+#file test
+test.ipynb
+test.py
+
+# Datasets
+datasets/
+pytorch_lightning_ver2/
+
+# Rar
+*.rar
+*.zip
+
+# log
+lightning_logs/
+output/
