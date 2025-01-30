@@ -10,13 +10,8 @@ from pathlib import Path
 from yolov9.utils.metrics import ConfusionMatrix, box_iou, ap_per_class, fitness
 from yolov9.utils.general import LOGGER, Profile, non_max_suppression, scale_boxes, xywh2xyxy, xyxy2xywh, check_amp, one_cycle, one_flat_cycle
 from yolov9.utils.loss_tal_dual import ComputeLoss
-from yolov9.utils.torch_utils import smart_optimizer, ModelEMA
+from yolov9.utils.torch_utils import smart_optimizer
 from lightning.pytorch import LightningModule
-
-
-# LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
-# RANK = int(os.getenv('RANK', -1))
-# WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 
 class LitYOLO(LightningModule):
@@ -30,12 +25,6 @@ class LitYOLO(LightningModule):
         self.loss_fn = loss_fn if loss_fn else ComputeLoss(model)
         self.gs = max(int(model.stride.max()), 32)
         
-
-        #optimizer
-        # amp = check_amp(model)
-        # self.scaler = torch.cuda.amp.GradScaler(enabled=amp)
-        # self.ema = ModelEMA(model) if RANK in {-1, 0} else None
-
         # auto optimizer
         self.automatic_optimization = False
         self.last_opt_step = -1
@@ -44,6 +33,7 @@ class LitYOLO(LightningModule):
         self.names = self.model.names if hasattr(self.model, 'names') else self.model.module.names
     
     def on_train_epoch_start(self):
+        LOGGER.info("\n*** Training Epoch ***\n")
         self.mloss = torch.zeros(3, device=self.device)
         self.optimizer.zero_grad()
         
@@ -83,19 +73,13 @@ class LitYOLO(LightningModule):
                 f'train/{x}',
                 self.mloss[idx],
                 on_epoch=True, 
-                on_step=False,
+                on_step=True,
                 prog_bar=True, 
                 logger=True,
                 sync_dist=self.dist
             )
 
-        # Backward
-        # if RANK != -1:
-        #     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-        # if self.opt.quad:
-        #     loss *= 4.
-
-        #optimizer
+        # #optimizer
         # self.scaler.scale(loss).backward()
         # if ni - self.last_opt_step >= self.accumulate:
         #     self.scaler.unscale_(self.optimizer)
@@ -111,11 +95,6 @@ class LitYOLO(LightningModule):
             
         return loss
     
-    # def on_train_epoch_end(self):
-        # self.lr = [x['lr'] for x in self.optimizer.param_groups]
-        # self.scheduler.step()
-        # self.ema.update_attr(self.model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
-
     def init(self):
         self.cuda = self.device != 'cpu'
 
@@ -132,6 +111,7 @@ class LitYOLO(LightningModule):
         
     def on_validation_epoch_start(self):
         self.init()
+        LOGGER.info("\n*** Validating ***\n")
 
     def validation_step(self, batch, batch_idx, conf_thres=0.001, iou_thres= 0.6, max_det=300,
                         save_hybrid = False, augment = False, single_cls= False, plots = True,
@@ -227,7 +207,7 @@ class LitYOLO(LightningModule):
             self.log(
                 f"val/{name}", loss[idx],
                 on_epoch=True, 
-                on_step=False,
+                on_step=True,
                 prog_bar=True, 
                 logger=True,
                 sync_dist=self.dist

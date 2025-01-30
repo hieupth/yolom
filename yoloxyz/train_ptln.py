@@ -171,7 +171,8 @@ def main(opt):
                       strategy='ddp_find_unused_parameters_true' if dist else 'auto',
                       log_every_n_steps=opt.log_steps,
                       logger=wandb_logger,
-                      precision=16
+                      precision=16,
+                      enable_progress_bar = True
                     )
 
     # if opt.do_train:
@@ -188,10 +189,10 @@ def main(opt):
     saved_ckpt_path = f'{saved_ckpt_path}/best.pt'
     trainer.save_checkpoint(saved_ckpt_path)
     
-    if opt.do_eval:
-        LOGGER.info("\n*** Evaluate ***\n")
-        trainer.devices = 0
-        trainer.test(lit_yolo, dataloaders=val_loader, ckpt_path="best")
+    # if opt.do_eval:
+    #     LOGGER.info("\n*** Evaluate ***\n")
+    #     trainer.devices = 0
+    #     trainer.test(lit_yolo, dataloaders=val_loader, ckpt_path="best")
     
 if __name__ == '__main__':
     opt = training_arguments(True)
