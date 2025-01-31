@@ -10,24 +10,40 @@ from pathlib import Path
 from yolov9.utils.metrics import ConfusionMatrix, box_iou, ap_per_class, fitness
 from yolov9.utils.general import LOGGER, Profile, non_max_suppression, scale_boxes, xywh2xyxy, xyxy2xywh, check_amp, one_cycle, one_flat_cycle
 from yolov9.utils.loss_tal_dual import ComputeLoss
-from yolov9.utils.torch_utils import smart_optimizer
+from yolov9.utils.torch_utils import smart_optimizer, ModelEMA
 from lightning.pytorch import LightningModule
 
+from multitasks.utils.loss_rtdetr import RTDETRDetectionLoss
+
+LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
+RANK = int(os.getenv('RANK', -1))
+WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 
 class LitYOLO(LightningModule):
-    def __init__(self, opt, model, hyp, loss_fn=None):
+    def __init__(self, opt, model, hyp, num_classes):
         super(LitYOLO, self).__init__()
         self.opt = opt
         self.model = model
         self.hyp = hyp
         
         self.dist = True if len(self.opt.device) > 1 else False
-        self.loss_fn = loss_fn if loss_fn else ComputeLoss(model)
         self.gs = max(int(model.stride.max()), 32)
+        self.detr = True if "rtdetr" in opt.cfg else False
+
+        if self.detr:
+            self.compute_loss = RTDETRDetectionLoss(num_classes, use_vfl=True) 
+        else:
+            self.compute_loss = ComputeLoss(model)  # init loss class
+
+        #optimizer
+        amp = check_amp(model)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=amp)
+        self.ema = ModelEMA(model) if RANK in {-1, 0} else None
         
         # auto optimizer
         self.automatic_optimization = False
         self.last_opt_step = -1
+        torch.use_deterministic_algorithms(False)
         
         # name 
         self.names = self.model.names if hasattr(self.model, 'names') else self.model.module.names
@@ -44,6 +60,7 @@ class LitYOLO(LightningModule):
         nb = self.trainer.num_training_batches
         nw = max(round(self.hyp['warmup_epochs'] * nb), 100) 
         ni = batch_idx + nb * self.current_epoch
+        bi = batch_idx
 
         # Warmup
         if ni <= nw:
@@ -63,9 +80,40 @@ class LitYOLO(LightningModule):
                 ns = [math.ceil(x * sf / self.gs) * self.gs for x in imgs.shape[2:]]  # new shape (stretched to gs-multiple)
                 imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)  
         
-        pred = self.model(imgs)
-        loss, loss_item = self.loss_fn(pred, targets.to(self.device))
-        self.mloss = (self.mloss * batch_idx + loss_item) / (batch_idx + 1) 
+        if self.detr:
+            bs = len(imgs)
+            batch_idx = targets[:, 0]
+            gt_groups = [(batch_idx == i).sum().item() for i in range(bs)]
+            _targets = {
+                "cls": targets[:,1].to(self.device, dtype=torch.long),
+                "bboxes": targets[:,2:].to(self.device),
+                "batch_idx": batch_idx.to(self.device, dtype=torch.long).view(-1),
+                "gt_groups": gt_groups,
+            }
+
+        pred = self.model(imgs, batch=_targets, detr=self.detr)
+        if self.detr:
+            dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = pred
+            if dn_meta is None:
+                dn_bboxes, dn_scores = None, None
+            else:
+                dn_bboxes, dec_bboxes = torch.split(dec_bboxes, dn_meta["dn_num_split"], dim=2)
+                dn_scores, dec_scores = torch.split(dec_scores, dn_meta["dn_num_split"], dim=2)
+
+            dec_bboxes = torch.cat([enc_bboxes.unsqueeze(0), dec_bboxes])  # (7, bs, 300, 4)
+            dec_scores = torch.cat([enc_scores.unsqueeze(0), dec_scores])
+
+            loss = self.compute_loss((dec_bboxes, dec_scores), _targets, 
+                                dn_bboxes=dn_bboxes, dn_scores=dn_scores, 
+                                dn_meta=dn_meta
+                            )
+            loss, loss_items = sum(loss.values()), torch.as_tensor(
+                [loss[k].detach() for k in ["loss_giou", "loss_class", "loss_bbox"]], device=self.device
+            )
+        else:
+            loss, loss_items = self.compute_loss(pred, targets.to(self.device))  # loss scaled by batch_size
+        
+        self.mloss = (self.mloss * bi + loss_items) / (bi + 1) 
 
         self.log('train/loss', loss, on_epoch=True, on_step=False, prog_bar=True, logger=True, sync_dist=self.dist)
         for idx, x in enumerate(['box_loss', 'diff_loss', 'cls_loss']):
@@ -79,21 +127,26 @@ class LitYOLO(LightningModule):
                 sync_dist=self.dist
             )
 
-        # #optimizer
-        # self.scaler.scale(loss).backward()
-        # if ni - self.last_opt_step >= self.accumulate:
-        #     self.scaler.unscale_(self.optimizer)
+        #optimizer
+        self.scaler.scale(loss).backward()
+        if ni - self.last_opt_step >= self.accumulate:
+            self.scaler.unscale_(self.optimizer)
         
-        #     # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)  # clip gradients
-        #     self.clip_gradients(self.optimizer, gradient_clip_val=10.0, gradient_clip_algorithm="norm")
-        #     self.scaler.step(self.optimizer)  # optimizer.step
-        #     self.scaler.update()
-        #     self.optimizer.zero_grad()
-        #     if self.ema:
-        #         self.ema.update(self.model)
-        #     self.last_opt_step = ni
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)  # clip gradients
+            self.clip_gradients(self.optimizer, gradient_clip_val=10.0, gradient_clip_algorithm="norm")
+            self.scaler.step(self.optimizer)  # optimizer.step
+            self.scaler.update()
+            self.optimizer.zero_grad()
+            if self.ema:
+                self.ema.update(self.model)
+            self.last_opt_step = ni
             
         return loss
+    
+    def on_train_epoch_end(self):
+        self.lr = [x['lr'] for x in self.optimizer.param_groups]
+        self.scheduler.step()
+        self.ema.update_attr(self.model, include=['yaml', 'nc', 'hyp', 'names', 'stride', 'class_weights'])
     
     def init(self):
         self.cuda = self.device != 'cpu'
@@ -207,7 +260,7 @@ class LitYOLO(LightningModule):
             self.log(
                 f"val/{name}", loss[idx],
                 on_epoch=True, 
-                on_step=True,
+                on_step=False,
                 prog_bar=True, 
                 logger=True,
                 sync_dist=self.dist
@@ -225,6 +278,12 @@ class LitYOLO(LightningModule):
                 logger=True,
                 sync_dist=self.dist
             )
+        
+        # Print results
+        s = ('%22s' + '%11s' * 4) % ('Class', 'P', 'R', 'mAP50', 'mAP50-95')
+        LOGGER.info(s)
+        pf = '%22s' + '%11.3g' * 4  # print format
+        LOGGER.info(pf % ('all', mp, mr, map50, map))
         
         total_loss = sum(loss) / len(loss)
         self.log('val/loss', total_loss, on_epoch=True, on_step=False, prog_bar=True, logger=True, sync_dist=self.dist)

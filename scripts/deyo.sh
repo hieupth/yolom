@@ -1,12 +1,11 @@
 python yoloxyz/train_ptln.py \
     --basemodel 'v9' \
     --weights C:/Users/admin/Desktop/datasets/yolov9-c.pt \
-    --cfg D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/architecture/yolov9-c.yaml \
+    --cfg D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/architecture/yolov9-s-rtdetr.yaml \
     --hyp D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/hyp/hyp.deyo.yaml \
-    --data D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/data/abjad.yaml \
+    --data D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/data/ptlnab.yaml \
     --do-train \
-    --do-eval \
-    --name test_ptln_yolov9 \
+    --name test_deyo_yolov9 \
     --batch 2 \
     --epochs 10 \
     --imgsz 320 \

@@ -13,11 +13,11 @@ from yolov9.utils.torch_utils import select_device, torch_distributed_zero_first
 from yolov9.utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset
 from yolov9.utils.loggers import Loggers
 from yolov9.utils.downloads import attempt_download
-from yolov9.models.yolo import Model as YOLO
 from yolov9.utils.dataloaders import create_dataloader
 
 from engine import LitYOLO
 from arguments import training_arguments
+from multitasks.models.yolov9.yolo import Model as YOLO
 
 
 
@@ -152,7 +152,7 @@ def main(opt):
     model.names = names
 
     # Build Yolo Pyotrch Lightning
-    lit_yolo = LitYOLO(opt = opt, model=model, hyp = hyp)
+    lit_yolo = LitYOLO(opt = opt, model=model, hyp = hyp, num_classes = num_classes)
 
     # Create callback functions
     model_checkpoint = ModelCheckpoint(
