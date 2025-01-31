@@ -29,6 +29,7 @@ class LitYOLO(LightningModule):
         self.dist = True if len(self.opt.device) > 1 else False
         self.gs = max(int(model.stride.max()), 32)
         self.detr = True if "rtdetr" in opt.cfg else False
+        LOGGER.info(f"\n*** DERT = {self.detr} ***\n")
 
         if self.detr:
             self.compute_loss = RTDETRDetectionLoss(num_classes, use_vfl=True) 
@@ -48,8 +49,20 @@ class LitYOLO(LightningModule):
         # name 
         self.names = self.model.names if hasattr(self.model, 'names') else self.model.module.names
     
+    def detr_target(self, imgs, targets):
+        bs = len(imgs)
+        batch_idx = targets[:, 0]
+        gt_groups = [(batch_idx == i).sum().item() for i in range(bs)]
+        _targets = {
+            "cls": targets[:,1].to(self.device, dtype=torch.long),
+            "bboxes": targets[:,2:].to(self.device),
+            "batch_idx": batch_idx.to(self.device, dtype=torch.long).view(-1),
+            "gt_groups": gt_groups,
+        }
+        return _targets
+
     def on_train_epoch_start(self):
-        LOGGER.info("\n*** Training Epoch ***\n")
+        LOGGER.info(f"\n*** Training Epoch {self.current_epoch} ***\n")
         self.mloss = torch.zeros(3, device=self.device)
         self.optimizer.zero_grad()
         
@@ -60,7 +73,6 @@ class LitYOLO(LightningModule):
         nb = self.trainer.num_training_batches
         nw = max(round(self.hyp['warmup_epochs'] * nb), 100) 
         ni = batch_idx + nb * self.current_epoch
-        bi = batch_idx
 
         # Warmup
         if ni <= nw:
@@ -81,18 +93,9 @@ class LitYOLO(LightningModule):
                 imgs = nn.functional.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)  
         
         if self.detr:
-            bs = len(imgs)
-            batch_idx = targets[:, 0]
-            gt_groups = [(batch_idx == i).sum().item() for i in range(bs)]
-            _targets = {
-                "cls": targets[:,1].to(self.device, dtype=torch.long),
-                "bboxes": targets[:,2:].to(self.device),
-                "batch_idx": batch_idx.to(self.device, dtype=torch.long).view(-1),
-                "gt_groups": gt_groups,
-            }
+            _targets = self.detr_target(imgs, targets)
+            pred = self.model(imgs, batch=_targets, detr=self.detr)
 
-        pred = self.model(imgs, batch=_targets, detr=self.detr)
-        if self.detr:
             dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = pred
             if dn_meta is None:
                 dn_bboxes, dn_scores = None, None
@@ -111,9 +114,10 @@ class LitYOLO(LightningModule):
                 [loss[k].detach() for k in ["loss_giou", "loss_class", "loss_bbox"]], device=self.device
             )
         else:
+            pred = self.model(imgs)
             loss, loss_items = self.compute_loss(pred, targets.to(self.device))  # loss scaled by batch_size
         
-        self.mloss = (self.mloss * bi + loss_items) / (bi + 1) 
+        self.mloss = (self.mloss * batch_idx + loss_items) / (batch_idx + 1) 
 
         self.log('train/loss', loss, on_epoch=True, on_step=False, prog_bar=True, logger=True, sync_dist=self.dist)
         for idx, x in enumerate(['box_loss', 'diff_loss', 'cls_loss']):
@@ -150,6 +154,7 @@ class LitYOLO(LightningModule):
     
     def init(self):
         self.cuda = self.device != 'cpu'
+        self.val_mloss = torch.zeros(3, device=self.device)
 
         self.dt = Profile(), Profile(), Profile()
         self.loss = torch.zeros(3, device=self.device)
@@ -166,12 +171,10 @@ class LitYOLO(LightningModule):
         self.init()
         LOGGER.info("\n*** Validating ***\n")
 
-    def validation_step(self, batch, batch_idx, conf_thres=0.001, iou_thres= 0.6, max_det=300,
-                        save_hybrid = False, augment = False, single_cls= False, plots = True,
-                        save_txt = False, save_json = False, save_conf = False, save_dir=Path('')):
+    def validation_step(self, batch, batch_idx):
         imgs, targets, paths, shapes = batch
         
-        imgs = imgs.to(self.device, non_blocking=True).float()
+        imgs = imgs.to(self.device, non_blocking=True)
     
         param_dtype = next(self.model.parameters()).dtype
         imgs = imgs.half() if param_dtype == torch.float16 else imgs.float()  # uint8 to fp16/32
@@ -180,27 +183,78 @@ class LitYOLO(LightningModule):
         nb, _, height, width = imgs.shape
 
         # Inference
+        if self.detr:
+            targets = targets.to(self.device)
+            _targets = self.detr_target(imgs, targets)
+
+        # Inference
         with self.dt[1]:
-            preds, train_out = self.model(imgs) if self.loss_fn else (self.model(imgs, augment=augment), None)
+            if self.detr:
+                preds = self.model(imgs, batch=_targets, detr=True)
+            else:
+                preds, train_out = self.model(imgs) if self.compute_loss else (self.model(imgs, augment=self.opt.augment), None)
         
         # Loss
-        if self.loss_fn:
-            preds = preds[1]
-            self.loss += self.loss_fn(train_out, targets)[1]  # box, obj, cls
+        if self.detr:
+            dec_bboxes, dec_scores, enc_bboxes, enc_scores, dn_meta = preds[1]
+            if dn_meta is None:
+                dn_bboxes, dn_scores = None, None
+            else:
+                dn_bboxes, dec_bboxes = torch.split(dec_bboxes, dn_meta["dn_num_split"], dim=2)
+                dn_scores, dec_scores = torch.split(dec_scores, dn_meta["dn_num_split"], dim=2)
+
+            dec_bboxes = torch.cat([enc_bboxes.unsqueeze(0), dec_bboxes])  # (7, bs, 300, 4)
+            dec_scores = torch.cat([enc_scores.unsqueeze(0), dec_scores])
+            
+            loss = self.compute_loss((dec_bboxes, dec_scores), _targets, 
+                                dn_bboxes=dn_bboxes, dn_scores=dn_scores, 
+                                dn_meta=dn_meta
+                            )
+            loss, loss_items = sum(loss.values()), torch.as_tensor(
+                            [loss[k].detach() for k in ["loss_giou", "loss_class", "loss_bbox"]], device=self.device
+                        )
+            self.val_mloss = (self.val_mloss * batch_idx + loss_items) / (batch_idx + 1)
         else:
-            preds = preds[0][1]
+            if self.compute_loss:
+                preds = preds[1]
+                self.loss += self.compute_loss(train_out, targets)[1]  # box, obj, cls
+            else:
+                preds = preds[0][1]
         
-        # NMS
-        targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.device)  # to pixels
-        lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
-        with self.dt[2]:
-            preds = non_max_suppression(preds,
-                                        conf_thres,
-                                        iou_thres,
-                                        labels=lb,
-                                        multi_label=True,
-                                        agnostic=single_cls,
-                                        max_det=max_det)
+        if self.detr:
+            bs, _, nd = preds[0].shape
+            bboxes, scores = preds[0].split((4, nd - 4), dim=-1)
+            # bboxes *= self.args.imgsz
+            outputs = [torch.zeros((0, 6), device=bboxes.device)] * bs
+            topk_values, topk_indexes = torch.topk(scores.reshape(scores.shape[0], -1), self.opt.max_det, dim=1)
+            topk_boxes = topk_indexes // scores.shape[2]
+            lbs = topk_indexes % scores.shape[2]
+            bboxes = torch.gather(bboxes, 1, topk_boxes.unsqueeze(-1).repeat(1,1,4))
+            scores = topk_values
+
+            for i, bbox in enumerate(bboxes):  # (300, 4)
+                bbox = xywh2xyxy(bbox)
+                score = scores[i]
+                cls = lbs[i]
+                # Do not need threshold for evaluation as only got 300 boxes here
+                # idx = score > self.args.conf
+                pred = torch.cat([bbox, score[..., None], cls[..., None]], dim=-1)  # filter
+                # Sort by confidence to correctly get internal metrics
+                pred = pred[score.argsort(descending=True)]
+                outputs[i] = pred  # [idx]
+            preds = outputs
+        else:
+            # NMS
+            targets[:, 2:] *= torch.tensor((width, height, width, height), device=self.device)  # to pixels
+            lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if self.opt.save_hybrid else []  # for autolabelling
+            with self.dt[2]:
+                preds = non_max_suppression(preds,
+                                            self.opt.conf_thres,
+                                            self.opt.iou_thres,
+                                            labels=lb,
+                                            multi_label=True,
+                                            agnostic=self.opt.single_cls,
+                                            max_det=self.opt.max_det)
 
         # Metrics
         for si, pred in enumerate(preds):
@@ -218,14 +272,17 @@ class LitYOLO(LightningModule):
                 continue
         
             # Predictions
-            if single_cls:
+            if self.opt.single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
             scale_boxes(imgs[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
 
             # Evaluate
             if nl:
-                tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                if self.detr:
+                    tbox = xywh2xyxy(labels[:, 1:5])  * torch.tensor(imgs[si].shape[1:], device=self.device)[[1, 0, 1, 0]]
+                else:
+                    tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
                 scale_boxes(imgs[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, self.iouv)
@@ -235,18 +292,18 @@ class LitYOLO(LightningModule):
             self.stats.append((correct, pred[:, 4], pred[:, 5], labels[:, 0]))  # (correct, conf, pcls, tcls)
 
             # Save/log
-            if save_txt:
-                save_one_txt(predn, save_conf, shape, file=save_dir / 'labels' / f'{path.stem}.txt')
+            if self.opt.save_txt:
+                save_one_txt(predn, self.opt.save_conf, shape, file=self.opt.save_dir / 'labels' / f'{path.stem}.txt')
             # if save_json:
             #     save_one_json(predn, self.jdict, path, class_map)
                 
         self.val_idx.append(batch_idx)
         
-    def on_validation_epoch_end(self, plots = True, save_dir=Path('')):
+    def on_validation_epoch_end(self):
         self.stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*self.stats)]  # to numpy
 
         if len(self.stats) and self.stats[0].any():
-            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*self.stats, plot=plots, save_dir=save_dir, names=self.names)
+            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*self.stats, plot=self.opt.plots, save_dir=self.opt.save_dir, names=self.names)
             ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
             mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
 
@@ -403,6 +460,19 @@ class LitYOLO(LightningModule):
         self.scheduler = scheduler 
         return [optimizer], [scheduler]
 
+def prepare_batch(si, batch, device):
+    """Prepares a batch of images and annotations for validation."""
+    idx = batch["batch_idx"] == si
+    imgsz = batch["img"][si].shape[1:]
+    cls = batch['cls'][batch["batch_idx"] == si]
+    bbox = batch["bboxes"][idx]
+    ori_shape = batch["ori_shape"]
+    ratio_pad = batch["ratio_pad"]
+    
+    if len(cls):
+        bbox = xywh2xyxy(bbox) * torch.tensor(imgsz, device=device)[[1, 0, 1, 0]]  # target boxes
+        scale_boxes(imgsz, bbox, ori_shape, ratio_pad=ratio_pad)  # native-space labels
+    return dict(cls=cls, bbox=bbox, ori_shape=ori_shape, imgsz=imgsz, ratio_pad=ratio_pad)
 
 def process_batch(detections, labels, iouv):
     """

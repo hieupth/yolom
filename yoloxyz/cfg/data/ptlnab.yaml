@@ -1,6 +1,6 @@
 train: C:/Users/admin/Desktop/Abjadyolov9/train/images
 val: C:/Users/admin/Desktop/Abjadyolov9/valid/images
-test: ../test/images
+test: C:/Users/admin/Desktop/Abjadyolov9/valid/images
 
 nc: 26
 names: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']

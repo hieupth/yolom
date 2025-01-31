@@ -5,6 +5,7 @@ python yoloxyz/train_ptln.py \
     --hyp D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/hyp/hyp.deyo.yaml \
     --data D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/data/ptlnab.yaml \
     --do-train \
+    --do-eval \
     --name test_deyo_yolov9 \
     --batch 2 \
     --epochs 10 \
@@ -12,4 +13,6 @@ python yoloxyz/train_ptln.py \
     --device 0 \
     --workers 2 \
     --close-mosaic 15 \
-    --min-items 0
+    --min-items 0 \
+    --freeze 23 \
+    --optimizer AdamW
