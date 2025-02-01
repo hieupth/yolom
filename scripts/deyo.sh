@@ -1,14 +1,15 @@
 python yoloxyz/train_ptln.py \
     --basemodel 'v9' \
-    --weights C:/Users/admin/Desktop/datasets/yolov9-c.pt \
-    --cfg D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/architecture/yolov9-c-rtdetr.yaml \
-    --hyp D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/hyp/hyp.deyo.yaml \
-    --data D:/FPT/AI/Major6/OJT_yolo/yoloxyz/cfg/data/ptlnab.yaml \
+    --lastlayer 'DETR' \
+    --weights runs/train/test_deyo_yolov928/weights/best.pt \
+    --cfg yoloxyz/cfg/architecture/yolov9-c-rtdetr.yaml \
+    --hyp yoloxyz/cfg/hyp/hyp.deyo.yaml \
+    --data yoloxyz/cfg/data/minicoco_yolo.yaml \
     --do-train \
     --do-eval \
     --name test_deyo_yolov9 \
     --batch 2 \
-    --epochs 10 \
+    --epochs 1 \
     --imgsz 320 \
     --device 0 \
     --workers 2 \

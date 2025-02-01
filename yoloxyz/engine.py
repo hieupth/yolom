@@ -4,13 +4,15 @@ import torch
 import random
 import numpy as np
 import torch.nn as nn
-from torch.optim import lr_scheduler
 from pathlib import Path
+from copy import deepcopy
+from datetime import datetime
+from torch.optim import lr_scheduler
 
 from yolov9.utils.metrics import ConfusionMatrix, box_iou, ap_per_class, fitness
 from yolov9.utils.general import LOGGER, Profile, non_max_suppression, scale_boxes, xywh2xyxy, xyxy2xywh, check_amp, one_cycle, one_flat_cycle
 from yolov9.utils.loss_tal_dual import ComputeLoss
-from yolov9.utils.torch_utils import smart_optimizer, ModelEMA
+from yolov9.utils.torch_utils import smart_optimizer, ModelEMA, de_parallel
 from lightning.pytorch import LightningModule
 
 from multitasks.utils.loss_rtdetr import RTDETRDetectionLoss
@@ -28,7 +30,7 @@ class LitYOLO(LightningModule):
         
         self.dist = True if len(self.opt.device) > 1 else False
         self.gs = max(int(model.stride.max()), 32)
-        self.detr = True if "rtdetr" in opt.cfg else False
+        self.detr = bool(opt.lastlayer == 'DETR')
         LOGGER.info(f"\n*** DERT = {self.detr} ***\n")
 
         if self.detr:
@@ -48,6 +50,8 @@ class LitYOLO(LightningModule):
         
         # name 
         self.names = self.model.names if hasattr(self.model, 'names') else self.model.module.names
+
+        self.best_fitness = 0.0
     
     def detr_target(self, imgs, targets):
         bs = len(imgs)
@@ -165,6 +169,12 @@ class LitYOLO(LightningModule):
         # validate
         self.iouv = torch.linspace(0.5, 0.95, 10, device=self.device)
         self.niou = self.iouv.numel()
+
+        #save
+        w = os.path.join(self.opt.save_dir,'weights')
+        if not os.path.exists(w):
+            os.makedirs(w)
+        self.last, self.best = os.path.join(w, 'last.pt'),  os.path.join(w, 'best.pt')
         
         
     def on_validation_epoch_start(self):
@@ -324,6 +334,9 @@ class LitYOLO(LightningModule):
             )
         
         fi = fitness(np.array([mp, mr, map50, map]).reshape(1, -1))[0]  # weighted combination of [P, R, mAP@.5, mAP@.5-.95]
+        if fi > self.best_fitness:
+            self.best_fitness = fi
+        self.save_model(fi)
                 
         for _, (name, value) in enumerate(zip(['mP', 'mR', 'mAP@.5', 'mAP@0.5:0.95', 'fi'], [mp, mr, map50, map, fi])):
             self.log(
@@ -346,6 +359,26 @@ class LitYOLO(LightningModule):
         self.log('val/loss', total_loss, on_epoch=True, on_step=False, prog_bar=True, logger=True, sync_dist=self.dist)
         
         return total_loss
+    
+    def save_model(self, fi):
+        final_epoch = bool(self.current_epoch == self.trainer.max_epochs - 1)
+        if (self.opt.nosave) or (final_epoch and not self.opt.evolve):  # if save
+            ckpt = {
+                'epoch': self.current_epoch,
+                'best_fitness': self.best_fitness,
+                'model': deepcopy(de_parallel(self.model)).half(),
+                'ema': deepcopy(self.ema.ema).half(),
+                'updates': self.ema.updates,
+                'optimizer': self.optimizer.state_dict(),
+                'opt': vars(self.opt),
+                'git': None,  # {remote, branch, commit} if a git repo
+                'date': datetime.now().isoformat()}
+            torch.save(ckpt, self.last)
+            if self.best_fitness == fi:
+                torch.save(ckpt, self.best)
+            if self.opt.save_period > 0 and self.current_epoch % self.opt.save_period == 0:
+                torch.save(ckpt, self.save_dir / 'weights' / f'epoch{self.current_epoch}.pt')
+            del ckpt
     
     def on_test_epoch_start(self):
         LOGGER.info(f'\nEvaluating . . .')

@@ -183,17 +183,6 @@ def main(opt):
         val_dataloaders=val_loader if opt.do_eval else None
     )
     
-    # Saves only on the main process    
-    saved_ckpt_path = f'{opt.save_dir}/weights'
-    os.makedirs(saved_ckpt_path, exist_ok=True)
-    saved_ckpt_path = f'{saved_ckpt_path}/best.pt'
-    trainer.save_checkpoint(saved_ckpt_path)
-    
-    # if opt.do_eval:
-    #     LOGGER.info("\n*** Evaluate ***\n")
-    #     trainer.devices = 0
-    #     trainer.test(lit_yolo, dataloaders=val_loader, ckpt_path="best")
-    
 if __name__ == '__main__':
     opt = training_arguments(True)
     # check config
