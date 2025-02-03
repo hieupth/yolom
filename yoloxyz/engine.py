@@ -66,7 +66,6 @@ class LitYOLO(LightningModule):
         return _targets
 
     def on_train_epoch_start(self):
-        LOGGER.info(f"\n*** Training Epoch {self.current_epoch} ***\n")
         self.mloss = torch.zeros(3, device=self.device)
         self.optimizer.zero_grad()
         
@@ -161,7 +160,6 @@ class LitYOLO(LightningModule):
         self.val_mloss = torch.zeros(3, device=self.device)
 
         self.dt = Profile(), Profile(), Profile()
-        self.loss = torch.zeros(3, device=self.device)
         self.stats, self.jdict, self.val_idx = [], [], []
         self.confusion_matrix = ConfusionMatrix(nc=self.model.nc)
         self.seen = 0
@@ -179,7 +177,7 @@ class LitYOLO(LightningModule):
         
     def on_validation_epoch_start(self):
         self.init()
-        LOGGER.info("\n*** Validating ***\n")
+        LOGGER.info(f"\n*** Validating epoch {self.current_epoch}***\n")
 
     def validation_step(self, batch, batch_idx):
         imgs, targets, paths, shapes = batch
@@ -227,7 +225,7 @@ class LitYOLO(LightningModule):
         else:
             if self.compute_loss:
                 preds = preds[1]
-                self.loss += self.compute_loss(train_out, targets)[1]  # box, obj, cls
+                self.val_mloss += self.compute_loss(train_out, targets)[1]  # box, obj, cls
             else:
                 preds = preds[0][1]
         
@@ -322,7 +320,7 @@ class LitYOLO(LightningModule):
         for i, c in enumerate(ap_class):
             self.maps[c] = ap[i]
             
-        loss = (self.loss.cpu() / len(self.val_idx)).tolist()
+        loss = (self.val_mloss.cpu() / len(self.val_idx)).tolist()
         for idx, name in enumerate(['box_loss', 'diff_loss', 'cls_loss']):
             self.log(
                 f"val/{name}", loss[idx],
