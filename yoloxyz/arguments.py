@@ -4,6 +4,7 @@ import argparse
 def training_arguments(known=False):
     parser = argparse.ArgumentParser()
     parser.add_argument('--basemodel', required=True, help="Define backbone model", choices=['v7', 'v9'])
+    parser.add_argument('--lastlayer', required=True, help="Define lastlayer model", choices=['NMS', 'DETR'])
     parser.add_argument('--weights', type=str, default='', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='yolo.yaml', help='model.yaml path')
     parser.add_argument('--data', type=str, default='data/widerface.yaml', help='data.yaml path')
@@ -58,4 +59,18 @@ def training_arguments(known=False):
     parser.add_argument('--bbox_interval', type=int, default=-1, help='Set bounding-box image logging interval')
     parser.add_argument('--artifact_alias', type=str, default='latest', help='Version of dataset artifact to use')
 
+    # val yolov9
+    parser.add_argument('--save_hybrid', type=bool, default=False, help='Flag to save hybrid datasets (True or False).')
+    parser.add_argument('--augment', type=bool, default=False, help='augmented inference')
+    parser.add_argument('--single_cls', type=bool, default=False, help='treat as single-class dataset')
+    parser.add_argument('--conf_thres', type=float, default=0.001, help='confidence threshold')
+    parser.add_argument('--iou_thres', type=float, default=0.7, help='NMS IoU threshold')
+    
+    # val deyo
+    parser.add_argument('--max_det', type=int, default=300, help='maximum detections per image')
+
+    parser.add_argument('--save_json', type=bool, default=False, help='save a COCO-JSON results file')
+    parser.add_argument('--save_txt', type=bool, default=False, help='save results to *.txt')
+    parser.add_argument('--save_conf', type=bool, default=False, help='save results to *.txt')
+    parser.add_argument('--plots', type=bool, default=True, help='')
     return parser.parse_known_args()[0] if known else parser.parse_args()

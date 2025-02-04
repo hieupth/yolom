@@ -11,13 +11,12 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 from yolov9.utils.torch_utils import select_device, torch_distributed_zero_first, de_parallel
 from yolov9.utils.general import LOGGER, check_file, init_seeds, intersect_dicts, check_img_size, colorstr, labels_to_class_weights, increment_path, check_yaml, check_dataset
-from yolov9.utils.loggers import Loggers
 from yolov9.utils.downloads import attempt_download
-from yolov9.models.yolo import Model as YOLO
 from yolov9.utils.dataloaders import create_dataloader
 
 from engine import LitYOLO
 from arguments import training_arguments
+from multitasks.models.yolov9.yolo import Model as YOLO
 
 
 
@@ -48,17 +47,10 @@ def main(opt):
 
     # Loggers
     data_dict = None
-    if RANK  in {-1, 0}:
-        loggers = Loggers(save_dir, opt.weights, opt, hyp, LOGGER) 
-
-        # Process custom dataset artifact link
-        data_dict = loggers.remote_dataset
-        if opt.resume:  # If resuming runs from remote artifact
-            weights, epochs, hyp, batch_size = opt.weights, opt.epochs, opt.hyp, opt.batch_size
-
     with torch_distributed_zero_first(LOCAL_RANK):
         data_dict = data_dict or check_dataset(opt.data) 
-    wandb_logger = WandbLogger(project=opt.name, log_model="all")
+    wandb_logger = WandbLogger(project="Deyo", name=opt.name, log_model="all")
+    wandb_logger.experiment # Log link wandb
 
     cuda = device.type != 'cpu'
     num_classes = 1 if opt.single_cls else int(data_dict['nc'])  # number of classes
@@ -152,7 +144,7 @@ def main(opt):
     model.names = names
 
     # Build Yolo Pyotrch Lightning
-    lit_yolo = LitYOLO(opt = opt, model=model, hyp = hyp)
+    lit_yolo = LitYOLO(opt = opt, model=model, hyp = hyp, num_classes = num_classes)
 
     # Create callback functions
     model_checkpoint = ModelCheckpoint(
@@ -171,7 +163,8 @@ def main(opt):
                       strategy='ddp_find_unused_parameters_true' if dist else 'auto',
                       log_every_n_steps=opt.log_steps,
                       logger=wandb_logger,
-                      precision=16
+                      precision=16,
+                      enable_progress_bar = True
                     )
 
     # if opt.do_train:
@@ -181,17 +174,6 @@ def main(opt):
         train_dataloaders=train_loader,
         val_dataloaders=val_loader if opt.do_eval else None
     )
-    
-    # Saves only on the main process    
-    saved_ckpt_path = f'{opt.save_dir}/weights'
-    os.makedirs(saved_ckpt_path, exist_ok=True)
-    saved_ckpt_path = f'{saved_ckpt_path}/best.pt'
-    trainer.save_checkpoint(saved_ckpt_path)
-    
-    if opt.do_eval:
-        LOGGER.info("\n*** Evaluate ***\n")
-        trainer.devices = 0
-        trainer.test(lit_yolo, dataloaders=val_loader, ckpt_path="best")
     
 if __name__ == '__main__':
     opt = training_arguments(True)

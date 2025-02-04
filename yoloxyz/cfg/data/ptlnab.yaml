@@ -1,0 +1,13 @@
+train: C:/Users/admin/Desktop/Abjadyolov9/train/images
+val: C:/Users/admin/Desktop/Abjadyolov9/valid/images
+test: C:/Users/admin/Desktop/Abjadyolov9/valid/images
+
+nc: 26
+names: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z']
+
+roboflow:
+  workspace: tugas-akhir-nkru1
+  project: abjad-gmxju
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/tugas-akhir-nkru1/abjad-gmxju/dataset/1

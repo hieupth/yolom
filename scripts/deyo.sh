@@ -1,0 +1,19 @@
+python yoloxyz/train_ptln.py \
+    --basemodel 'v9' \
+    --lastlayer 'DETR' \
+    --weights runs/train/test_deyo_yolov928/weights/best.pt \
+    --cfg yoloxyz/cfg/architecture/yolov9-c-rtdetr.yaml \
+    --hyp yoloxyz/cfg/hyp/hyp.deyo.yaml \
+    --data yoloxyz/cfg/data/minicoco_yolo.yaml \
+    --do-train \
+    --do-eval \
+    --name test_deyo_yolov9 \
+    --batch 2 \
+    --epochs 1 \
+    --imgsz 320 \
+    --device 0 \
+    --workers 2 \
+    --close-mosaic 15 \
+    --min-items 0 \
+    --freeze 23 \
+    --optimizer AdamW
